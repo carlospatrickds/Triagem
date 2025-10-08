@@ -1,87 +1,39 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import base64
 from datetime import datetime
 
 # Configuração da página
 st.set_page_config(
-    page_title="Tratamento de Dados PJE",
+    page_title="Tratamento de Dados PJE - Versão Simplificada",
     page_icon="📊",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    layout="wide"
 )
 
-# Estilo CSS personalizado
-st.markdown("""
-<style>
-    .main-header {
-        font-size: 2.5rem;
-        color: #1E3A8A;
-        text-align: center;
-        margin-bottom: 1rem;
-    }
-    .sub-header {
-        font-size: 1.5rem;
-        color: #2563EB;
-        margin-bottom: 1rem;
-    }
-    .info-text {
-        font-size: 1rem;
-        color: #4B5563;
-    }
-    .highlight {
-        background-color: #DBEAFE;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        margin-bottom: 1rem;
-    }
-    .stButton>button {
-        background-color: #2563EB;
-        color: white;
-        font-weight: bold;
-    }
-</style>
-""", unsafe_allow_html=True)
-
 # Título principal
-st.markdown("<h1 class='main-header'>Tratamento de Dados PJE</h1>", unsafe_allow_html=True)
+st.title("Tratamento de Dados PJE - Versão Simplificada")
+st.markdown("Aplicação para processamento e análise de dados de processos judiciais.")
 
 # Função para converter timestamp para data legível
 def convert_timestamp(timestamp):
     if pd.isna(timestamp):
         return None
     try:
-        # Converter timestamp para milissegundos
         if isinstance(timestamp, str):
             timestamp = float(timestamp)
         return datetime.fromtimestamp(timestamp/1000).strftime('%d/%m/%Y %H:%M')
     except:
         return timestamp
 
-# Função para download de dataframe como CSV
-def get_csv_download_link(df, filename="dados_processados.csv"):
-    csv = df.to_csv(index=False, sep=';', encoding='utf-8-sig')
-    b64 = base64.b64encode(csv.encode('utf-8-sig')).decode()
-    href = f'<a href="data:file/csv;base64,{b64}" download="{filename}">Baixar arquivo CSV processado</a>'
-    return href
-
-# Função para download de dataframe como CSV (simplificada)
-def get_excel_download_link(df, filename="dados_processados.csv"):
-    csv = df.to_csv(index=False, sep=';', encoding='utf-8-sig')
-    b64 = base64.b64encode(csv.encode('utf-8-sig')).decode()
-    href = f'<a href="data:file/csv;base64,{b64}" download="{filename}">Baixar arquivo Excel processado</a>'
-    return href
-
 # Sidebar para upload e opções
 with st.sidebar:
-    st.markdown("<h2 class='sub-header'>Opções de Processamento</h2>", unsafe_allow_html=True)
+    st.header("Opções de Processamento")
     
     # Upload de arquivo
     uploaded_files = st.file_uploader("Carregar arquivos CSV", type=["csv"], accept_multiple_files=True)
     
     # Opções de processamento
-    st.markdown("<h3>Configurações</h3>", unsafe_allow_html=True)
+    st.subheader("Configurações")
     
     delimiter = st.selectbox(
         "Delimitador do CSV",
@@ -95,14 +47,8 @@ with st.sidebar:
         index=0
     )
     
-    date_format = st.selectbox(
-        "Formato de data para conversão",
-        options=["%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y", "%m/%d/%Y"],
-        index=0
-    )
-    
     # Opções de filtro
-    st.markdown("<h3>Filtros</h3>", unsafe_allow_html=True)
+    st.subheader("Filtros")
     filter_options = st.multiselect(
         "Selecione as colunas para filtrar",
         options=["Número do Processo", "Classe", "Órgão Julgador", "Tarefa", "Prioridade"]
@@ -125,7 +71,7 @@ def process_data(files, delimiter, encoding):
                 encoding=encoding,
                 low_memory=False,
                 quotechar='"',
-                error_bad_lines=False
+                on_bad_lines='skip'  # Versão mais recente do pandas usa on_bad_lines em vez de error_bad_lines
             )
             
             # Adicionar nome do arquivo como coluna
@@ -174,7 +120,7 @@ def generate_visualizations(df):
     if df is None or df.empty:
         return
     
-    st.markdown("<h2 class='sub-header'>Visualizações</h2>", unsafe_allow_html=True)
+    st.header("Visualizações")
     
     # Dividir em duas colunas
     col1, col2 = st.columns(2)
@@ -212,17 +158,6 @@ def generate_visualizations(df):
             color="Órgão Julgador"
         )
         st.plotly_chart(fig3, use_container_width=True)
-    
-    # Gráfico de prioridade
-    if "Prioridade" in df.columns:
-        fig4 = px.pie(
-            df["Prioridade"].value_counts().reset_index(),
-            values="count",
-            names="Prioridade",
-            title="Distribuição por Prioridade",
-            color_discrete_map={"Sim": "#EF4444", "Não": "#10B981"}
-        )
-        st.plotly_chart(fig4, use_container_width=True)
 
 # Processamento principal
 if uploaded_files:
@@ -230,7 +165,7 @@ if uploaded_files:
     df = process_data(uploaded_files, delimiter, encoding)
     
     if df is not None:
-        st.markdown("<h2 class='sub-header'>Dados Carregados</h2>", unsafe_allow_html=True)
+        st.header("Dados Carregados")
         st.write(f"Total de registros: {len(df)}")
         
         # Criar filtros dinâmicos
@@ -249,19 +184,15 @@ if uploaded_files:
         filtered_df = apply_filters(df, filters)
         
         # Mostrar dados filtrados
-        st.markdown("<h2 class='sub-header'>Dados Filtrados</h2>", unsafe_allow_html=True)
+        st.header("Dados Filtrados")
         st.write(f"Registros após filtros: {len(filtered_df)}")
         st.dataframe(filtered_df)
         
         # Gerar visualizações
         generate_visualizations(filtered_df)
         
-        # Opções de download
-        st.markdown("<h2 class='sub-header'>Download dos Dados Processados</h2>", unsafe_allow_html=True)
-        st.markdown(get_csv_download_link(filtered_df), unsafe_allow_html=True)
-        
         # Análises adicionais
-        st.markdown("<h2 class='sub-header'>Análises Adicionais</h2>", unsafe_allow_html=True)
+        st.header("Análises Adicionais")
         
         # Estatísticas de dias
         if "Dias" in filtered_df.columns:
@@ -280,25 +211,20 @@ if uploaded_files:
                 columns={"Classe": "Classe", "count": "Quantidade"}
             ))
 else:
-    st.markdown("""
-    <div class="highlight">
-        <h2 class='sub-header'>Bem-vindo ao Sistema de Tratamento de Dados PJE</h2>
-        <p class='info-text'>Este aplicativo permite processar e analisar dados de processos judiciais do PJE.</p>
-        <p class='info-text'>Para começar, faça o upload de um ou mais arquivos CSV no painel lateral.</p>
-        <p class='info-text'>Funcionalidades disponíveis:</p>
-        <ul>
-            <li>Carregamento de múltiplos arquivos CSV</li>
-            <li>Filtragem de dados por diferentes critérios</li>
-            <li>Visualizações gráficas dos dados</li>
-            <li>Estatísticas e análises</li>
-            <li>Exportação dos dados processados</li>
-        </ul>
-    </div>
-    """, unsafe_allow_html=True)
+    st.info("""
+    ### Bem-vindo ao Sistema de Tratamento de Dados PJE
+    
+    Este aplicativo permite processar e analisar dados de processos judiciais do PJE.
+    
+    Para começar, faça o upload de um ou mais arquivos CSV no painel lateral.
+    
+    **Funcionalidades disponíveis:**
+    - Carregamento de múltiplos arquivos CSV
+    - Filtragem de dados por diferentes critérios
+    - Visualizações gráficas dos dados
+    - Estatísticas e análises
+    """)
 
-# Adicionar informações de rodapé
-st.markdown("""
-<div style="text-align: center; margin-top: 3rem; padding-top: 1rem; border-top: 1px solid #e5e7eb;">
-    <p>Desenvolvido para tratamento de dados do PJE - 2025</p>
-</div>
-""", unsafe_allow_html=True)
+# Rodapé
+st.markdown("---")
+st.caption("Desenvolvido para tratamento de dados do PJE - 2025")
