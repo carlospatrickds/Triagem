@@ -1,46 +1,22 @@
-# Tratamento de Dados PJE
+# Processador de CSV - PJE
 
-Aplicação web para processamento e análise de dados de processos judiciais do PJE (Processo Judicial Eletrônico).
+## Instruções Rápidas
 
-## Funcionalidades
+1. **Instalação**: `pip install streamlit pandas`
+2. **Execução**: `streamlit run app_basico.py`
 
-- Carregamento de múltiplos arquivos CSV
-- Processamento automático de datas e valores
-- Filtragem de dados por diferentes critérios
-- Visualizações gráficas interativas
-- Estatísticas e análises
-- Exportação dos dados processados
+## Versões Disponíveis
 
-## Requisitos
+- `app_basico.py` - Versão ultra simplificada (recomendada)
+- `app_minimo.py` - Versão com mais recursos
+- `app_tratamento_dados.py` - Versão completa
 
-- Python 3.8 ou superior
-- Bibliotecas listadas em `requirements.txt`
+## Solução de Problemas
 
-## Instalação
-
-1. Clone este repositório:
-   ```
-   git clone https://github.com/seu-usuario/tratamento-dados-pje.git
-   cd tratamento-dados-pje
-   ```
-
-2. Instale as dependências:
-   ```
-   pip install -r requirements.txt
-   ```
-
-## Uso
-
-1. Execute a aplicação Streamlit:
-   ```
-   streamlit run app_tratamento_dados.py
-   ```
-
-2. Acesse a aplicação no navegador (geralmente em http://localhost:8501)
-
-3. Faça o upload dos arquivos CSV através do painel lateral
-
-4. Utilize os filtros e visualize as análises geradas automaticamente
+Se encontrar erros:
+1. Verifique se o Python está instalado
+2. Use a versão mais básica (`app_basico.py`)
+3. Instale dependências individualmente: `pip install streamlit==1.15.0 pandas==1.3.5`
 
 ## Deploy
 
