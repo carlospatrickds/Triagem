@@ -802,4 +802,117 @@ def main():
                         # Seleção de processo para edição
                         processo_selecionado = st.selectbox(
                             "Selecione um processo para atribuir servidor:",
-                            options=processos_disponiveis['NUMERO_PROCESSO'].
+                            options=processos_disponiveis['NUMERO_PROCESSO'].tolist(),
+                            key="processo_edicao"
+                        )
+                        
+                        if processo_selecionado:
+                            # Informações do processo selecionado
+                            processo_info = processos_disponiveis[
+                                processos_disponiveis['NUMERO_PROCESSO'] == processo_selecionado
+                            ].iloc[0]
+                            
+                            st.markdown("**Informações do Processo:**")
+                            # --- QUADRO DE INFORMAÇÕES DO PROCESSO ---
+                            st.markdown(f'<div class="info-processo">', unsafe_allow_html=True)
+                            st.markdown(f"**Número:** {processo_info['NUMERO_PROCESSO']}")
+                            st.markdown(f"**Polo Ativo:** {processo_info.get('POLO_ATIVO', 'N/A')}")
+                            st.markdown(f"**Polo Passivo:** {processo_info.get('POLO_PASSIVO', 'N/A')}")
+                            
+                            # ASSUNTO EM DESTAQUE
+                            assunto = processo_info.get('ASSUNTO_PRINCIPAL', 'N/A')
+                            st.markdown(f'<div class="assunto-destaque"><strong>Assunto:</strong> {assunto}</div>', unsafe_allow_html=True)
+                            
+                            # Determinar Vara Final (usar Órgão Julgador se 'vara' for "Vara não identificada")
+                            vara_atual = processo_info.get('vara', 'Vara não identificada')
+                            orgao_julgador = processo_info.get('ORGAO_JULGADOR', 'N/A')
+                            
+                            if vara_atual == "Vara não identificada":
+                                vara_final = orgao_julgador
+                            else:
+                                vara_final = vara_atual
+                            
+                            st.markdown(f"**Vara:** {vara_final}")
+                            st.markdown(f"**Órgão Julgador:** {orgao_julgador}")
+                            st.markdown(f"**Data de Chegada:** {processo_info.get('data_chegada_formatada', 'N/A')}")
+                            st.markdown('</div>', unsafe_allow_html=True)
+                            # --- FIM DO QUADRO DE INFORMAÇÕES ---
+                            
+                            # Seleção de servidor (usando a lista fixa que o usuário tinha)
+                            novo_servidor = st.selectbox(
+                                "Atribuir servidor:",
+                                options=servidores_disponiveis,
+                                key="novo_servidor"
+                            )
+                            
+                            # Botão para aplicar a alteração
+                            if st.button("💾 Aplicar Atribuição", key="aplicar_edicao"):
+                                
+                                # Criar registro da atribuição
+                                atribuicao = {
+                                    'NUMERO_PROCESSO': processo_info['NUMERO_PROCESSO'],
+                                    'vara': vara_final,
+                                    'ORGAO_JULGADOR': orgao_julgador, # Mapeado para o nome padronizado
+                                    'servidor': novo_servidor,
+                                    'data_atribuicao': get_local_time().strftime('%d/%m/%Y %H:%M'),
+                                    'POLO_ATIVO': processo_info.get('POLO_ATIVO', ''),
+                                    'ASSUNTO_PRINCIPAL': processo_info.get('ASSUNTO_PRINCIPAL', '')
+                                }
+                                
+                                # Adicionar à session state
+                                nova_atribuicao_df = pd.DataFrame([atribuicao])
+                                st.session_state.atribuicoes_servidores = pd.concat(
+                                    [st.session_state.atribuicoes_servidores, nova_atribuicao_df], 
+                                    ignore_index=True
+                                ).drop_duplicates(subset=['NUMERO_PROCESSO'], keep='last')
+                                
+                                st.success(f"✅ Servidor **'{novo_servidor}'** atribuído ao processo **{processo_selecionado}**!")
+                                st.rerun()
+                                
+                    else:
+                        st.success("🎉 Todos os processos já possuem servidor atribuído (ou foram atribuídos nesta sessão)!")
+                
+                with col2:
+                    st.markdown("#### ✅ Processos Atribuídos")
+                    
+                    if not st.session_state.atribuicoes_servidores.empty:
+                        st.markdown(f"**Total de processos atribuídos:** {len(st.session_state.atribuicoes_servidores)}")
+                        
+                        # Exibir processos atribuídos
+                        # Note: Usamos ORGAO_JULGADOR que é o nome padronizado no DataFrame da session state
+                        df_exibicao_atribuidos = st.session_state.atribuicoes_servidores[[
+                            'NUMERO_PROCESSO', 'vara', 'ORGAO_JULGADOR', 'servidor', 'data_atribuicao'
+                        ]].copy()
+                        
+                        df_exibicao_atribuidos.columns = ['Nº Processo', 'Vara', 'Órgão Julgador', 'Servidor', 'Data/Hora Atribuição']
+                        st.dataframe(df_exibicao_atribuidos, use_container_width=True)
+                        
+                        # Botão para download do CSV
+                        st.markdown("---")
+                        st.markdown("#### 📥 Download das Atribuições")
+                        
+                        csv_atribuicoes = gerar_csv_atribuicoes(st.session_state.atribuicoes_servidores)
+                        if csv_atribuicoes:
+                            # Base64 encoding para o download com latin-1
+                            csv_b64 = base64.b64encode(csv_atribuicoes.encode('latin-1')).decode()
+                            href = f'<a href="data:text/csv;base64,{csv_b64}" download="atribuicoes_servidores_{get_local_time().strftime("%Y%m%d_%H%M")}.csv">📊 Baixar CSV com Atribuições</a>'
+                            st.markdown(href, unsafe_allow_html=True)
+                            st.info("O arquivo CSV contém as colunas: Número do Processo, Vara, Órgão Julgador e Servidor Atribuído")
+                        
+                        if st.button("Limpar Atribuições (Resetar Tabela)", type="secondary"):
+                            st.session_state.atribuicoes_servidores = pd.DataFrame(columns=['NUMERO_PROCESSO', 'vara', 'ORGAO_JULGADOR', 'servidor'])
+                            st.rerun()
+                            
+                    else:
+                        st.info("Nenhum processo atribuído ainda. Use o quadro à esquerda para fazer as primeiras atribuições.")
+        
+        except pd.errors.ParserError:
+            st.error("Erro ao ler o arquivo CSV. Certifique-se de que o separador é o **ponto e vírgula (;)** e a codificação é UTF-8.")
+        except KeyError as e:
+            st.error(f"Coluna essencial não encontrada após a padronização: {e}. Verifique se o seu arquivo possui as colunas de data e etiquetas.")
+        except Exception as e:
+            # Captura o erro genérico para debugar
+            st.error(f"Ocorreu um erro inesperado: {e}")
+
+if __name__ == "__main__":
+    main()
