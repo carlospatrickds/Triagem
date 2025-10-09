@@ -79,8 +79,8 @@ COLUNA_MAP = {
     'ASSUNTO_PRINCIPAL': ['Assunto', 'assuntoPrincipal'],
     'TAREFA': ['Tarefa', 'nomeTarefa'],
     'ETIQUETAS': ['Etiquetas', 'tagsProcessoList'],
-    'DIAS': ['Dias'],  # Coluna 'Dias' do primeiro arquivo
-    'DATA_CHEGADA_RAW': ['Data Último Movimento', 'dataChegada'] # Coluna bruta de data para processamento
+    'DIAS': ['Dias'],  # Coluna 'Dias' do Painel Gerencial
+    'DATA_CHEGADA_RAW': ['Data Último Movimento', 'dataChegada'] # Coluna bruta de data
 }
 
 # --- FUNÇÕES AUXILIARES ---
@@ -105,11 +105,40 @@ def mapear_e_padronizar_colunas(df: pd.DataFrame) -> pd.DataFrame:
     df.rename(columns=colunas_padronizadas, inplace=True)
     return df
 
-def processar_dados(df):
-    """Processa os dados do CSV, usando APENAS nomes de colunas padronizados."""
+def extrair_data_chegada(data_str):
+    """Tenta extrair a data de chegada no formato DD/MM/YYYY para objeto datetime (para DATA_CHEGADA_RAW)."""
+    if pd.isna(data_str):
+        return pd.NaT
+    data_str = str(data_str)
     
-    # Criar cópia para não modificar o original
+    # Caso 1: Formato "DD/MM/YYYY, HH:MM:SS" (arquivo Cálculo - Elaborar)
+    try:
+        data_part = data_str.split(',')[0].strip()
+        return datetime.strptime(data_part, '%d/%m/%Y')
+    except:
+        pass
+    
+    # Caso 2: Formato Timestamp (arquivo Painel Gerencial)
+    try:
+        if len(data_str) > 10 and data_str.isdigit():
+            timestamp_ms = int(data_str)
+            # Converter para datetime (dividindo por 1000 se for milissegundos)
+            if timestamp_ms > 253402300799:  # Se for muito grande, provavelmente está em milissegundos
+                timestamp_ms = timestamp_ms / 1000
+            return datetime.fromtimestamp(timestamp_ms)
+    except:
+        pass
+        
+    return pd.NaT
+
+def processar_dados(df):
+    """
+    Processa os dados do CSV, priorizando a coluna 'DIAS' para o cálculo da data
+    ou a coluna 'DATA_CHEGADA_RAW'.
+    """
+    
     processed_df = df.copy()
+    data_referencia = get_local_time().date()
     
     # Colunas essenciais que DEVEM existir após a padronização
     if 'ETIQUETAS' not in processed_df.columns:
@@ -125,7 +154,7 @@ def processar_dados(df):
         for tag in tags_list:
             if 'Servidor' in tag or 'Supervisão' in tag:
                 return tag
-        return "Sem etiqueta"  # Alterado para considerar apenas processos SEM etiqueta
+        return "Sem etiqueta"
     
     def extrair_vara(tags):
         if pd.isna(tags):
@@ -140,64 +169,52 @@ def processar_dados(df):
     processed_df['servidor'] = processed_df['ETIQUETAS'].apply(extrair_servidor)
     processed_df['vara'] = processed_df['ETIQUETAS'].apply(extrair_vara)
 
-    # --- 2. Processar Datas e Calcular Dias ---
+    # --- 2. Processar Datas e Calcular Dias (LÓGICA CORRIGIDA E OTIMIZADA) ---
     
-    if 'DATA_CHEGADA_RAW' in processed_df.columns:
+    data_col_existente = False
+    
+    # Prioridade A: Se a coluna DIAS existe (Painel Gerencial)
+    if 'DIAS' in processed_df.columns:
+        st.info("Utilizando coluna 'DIAS' do arquivo e calculando a data de chegada por retroação...")
+        data_col_existente = True
         
-        def extrair_data_chegada(data_str):
-            """Tenta extrair a data de chegada no formato DD/MM/YYYY para objeto datetime."""
-            if pd.isna(data_str):
-                return None
-            data_str = str(data_str)
-            
-            # Caso 1: Formato "DD/MM/YYYY, HH:MM:SS" (modelotester)
-            try:
-                data_part = data_str.split(',')[0].strip()
-                return datetime.strptime(data_part, '%d/%m/%Y')
-            except:
-                pass
-            
-            # Caso 2: Formato Timestamp (Processos_Painel_Gerencial_PJE+R)
-            try:
-                # O primeiro arquivo usa um timestamp em milissegundos
-                if len(data_str) > 10 and data_str.isdigit():
-                    timestamp_ms = int(data_str)
-                    # Converter para datetime (dividindo por 1000 se for milissegundos)
-                    if timestamp_ms > 253402300799:  # Se for muito grande, provavelmente está em milissegundos
-                        timestamp_ms = timestamp_ms / 1000
-                    return datetime.fromtimestamp(timestamp_ms)
-            except:
-                pass
-                
-            return None
-
+        # Converte 'DIAS' para numérico
+        processed_df['DIAS'] = pd.to_numeric(processed_df['DIAS'], errors='coerce').fillna(0).astype(int)
+        
+        # Calcula a data de chegada retroagindo os dias da data atual
+        processed_df['data_chegada_obj'] = processed_df['DIAS'].apply(
+            lambda x: datetime.combine(data_referencia - timedelta(days=x), datetime.min.time()) if x is not None and x >= 0 else pd.NaT
+        )
+        
+    # Prioridade B: Se a coluna DATA_CHEGADA_RAW existe (Cálculo - Elaborar)
+    elif 'DATA_CHEGADA_RAW' in processed_df.columns:
+        st.info("Utilizando coluna 'DATA_CHEGADA_RAW' para calcular a data de chegada e os DIAS...")
+        data_col_existente = True
+        
         # Aplica a extração da data
         processed_df['data_chegada_obj'] = processed_df['DATA_CHEGADA_RAW'].apply(extrair_data_chegada)
         
-        # Remove datas inválidas (None)
+        # Calcular coluna 'DIAS' a partir da data de chegada
+        processed_df['DIAS'] = (data_referencia - processed_df['data_chegada_obj'].dt.date).dt.days
+        processed_df['DIAS'] = processed_df['DIAS'].fillna(0).astype(int)
+
+    # 3. --- Processamento Comum da Data (Se a coluna 'data_chegada_obj' foi criada) ---
+    if data_col_existente and 'data_chegada_obj' in processed_df.columns:
+        
+        # Remove datas inválidas (None/NaT)
         processed_df = processed_df[processed_df['data_chegada_obj'].notna()]
         
-        # Calcula Mês e Ano
+        # Calcular Mês e Ano
         processed_df['mes'] = processed_df['data_chegada_obj'].dt.month
         processed_df['ano'] = processed_df['data_chegada_obj'].dt.year
         processed_df['mes_ano'] = processed_df['data_chegada_obj'].dt.strftime('%m/%Y')
         
-        # Formatar data de chegada (apenas data)
-        processed_df['data_chegada_formatada'] = processed_df['data_cheGada_obj'].dt.strftime('%d/%m/%Y')
-        
-        # Calcular coluna 'DIAS' se não existir
-        if 'DIAS' not in processed_df.columns:
-            st.info("Calculando coluna 'DIAS' a partir da data de chegada...")
-            # Usando a data atual como referência
-            data_referencia = get_local_time().date() # Usar apenas a data para cálculo de dias
-            
-            # Calcular a diferença em dias
-            processed_df['DIAS'] = (data_referencia - processed_df['data_chegada_obj'].dt.date).dt.days
-            processed_df['DIAS'] = processed_df['DIAS'].fillna(0).astype(int)
+        # Formatar data de chegada (AGORA CORRIGIDO O TYPO!)
+        processed_df['data_chegada_formatada'] = processed_df['data_chegada_obj'].dt.strftime('%d/%m/%Y')
         
         # Ordenar por data de chegada (mais recente primeiro)
         processed_df = processed_df.sort_values('data_chegada_obj', ascending=False)
-        
+    
     # Colunas de saída (usando os nomes padronizados)
     cols_to_keep = list(COLUNA_MAP.keys()) + ['servidor', 'vara', 'data_chegada_obj', 'mes', 'ano', 'mes_ano', 'data_chegada_formatada']
     cols_to_keep = [col for col in cols_to_keep if col in processed_df.columns]
@@ -512,7 +529,7 @@ def gerar_link_download_pdf(pdf, nome_arquivo):
         return ""
 
 def gerar_csv_atribuicoes(df_atribuicoes):
-    """Gera CSV com as atribuições de servidor - AGORA COM 4 COLUNAS (Nº Processo, Vara, Órgão Julgador, Servidor Atribuído)"""
+    """Gera CSV com as atribuições de servidor no formato final solicitado."""
     if df_atribuicoes.empty:
         return None
     
@@ -565,10 +582,9 @@ def main():
             
             # Inicializar session state para atribuições
             if 'atribuicoes_servidores' not in st.session_state:
-                # O DataFrame deve ter as colunas padronizadas que serão usadas na função gerar_csv_atribuicoes
                 st.session_state.atribuicoes_servidores = pd.DataFrame(columns=['NUMERO_PROCESSO', 'vara', 'ORGAO_JULGADOR', 'servidor'])
             
-            # Abas para organização - AGORA COM GUIA SEPARADA PARA ATRIBUIÇÃO
+            # Abas para organização
             tab1, tab2, tab3, tab4 = st.tabs(["📊 Visão Geral", "📈 Estatísticas", "🔍 Filtros Avançados", "✍️ Atribuir Servidores"])
             
             with tab1:
@@ -590,13 +606,11 @@ def main():
                     st.metric("Total de Processos", len(processed_df))
                 
                 with col2:
-                    servidores_unicos = processed_df['servidor'].nunique() if 'servidor' in processed_df.columns else 0
                     # Excluir "Sem etiqueta" da contagem de servidores ativos
                     servidores_ativos = processed_df[processed_df['servidor'] != 'Sem etiqueta']['servidor'].nunique() if 'servidor' in processed_df.columns else 0
                     st.metric("Servidores Envolvidos", servidores_ativos)
                 
                 with col3:
-                    varas_unicas = processed_df['vara'].nunique() if 'vara' in processed_df.columns else 0
                     # Excluir "Vara não identificada"
                     varas_identificadas = processed_df[processed_df['vara'] != 'Vara não identificada']['vara'].nunique() if 'vara' in processed_df.columns else 0
                     st.metric("Varas Federais", varas_identificadas)
@@ -803,7 +817,7 @@ def main():
                                 if href:
                                     st.markdown(href, unsafe_allow_html=True)
             
-            # --- TAB 4: ATRIBUIR SERVIDORES (LÓGICA ADICIONADA) ---
+            # --- TAB 4: ATRIBUIR SERVIDORES ---
             with tab4:
                 st.markdown("### ✍️ Atribuir Servidores e Gerar Planilha de Controle")
 
@@ -813,8 +827,8 @@ def main():
 
                 servidores_existentes = sorted([s for s in processed_df['servidor'].unique() if s != 'Sem etiqueta'])
 
-                if 'servidor' in processed_df.columns and not servidores_existentes:
-                     st.warning("Não foram encontradas etiquetas de servidores para realizar atribuições.")
+                if not servidores_existentes:
+                     st.warning("Não foram encontradas etiquetas de servidores para realizar atribuições. Verifique se há etiquetas como 'Servidor XX' na base.")
                 
                 if not df_para_atribuir.empty and servidores_existentes:
                     
@@ -871,7 +885,7 @@ def main():
                             # Selecionar as colunas necessárias para o controle final
                             cols_controle = ['NUMERO_PROCESSO', 'vara', 'ORGAO_JULGADOR', 'servidor']
                             
-                            # Concatenar com as atribuições existentes (keep='last' para sobrescrever se o processo já estava atribuído)
+                            # Concatenar com as atribuições existentes (keep='last' para sobrescrever)
                             st.session_state.atribuicoes_servidores = pd.concat([
                                 st.session_state.atribuicoes_servidores, 
                                 novas_atribuicoes[cols_controle]
@@ -899,15 +913,16 @@ def main():
 
                         st.markdown("##### Processos Atribuídos (Nesta Sessão)")
                         
-                        # Exibir o DataFrame de atribuições (já renomeado dentro de gerar_csv_atribuicoes)
+                        # Exibir o DataFrame de atribuições
                         df_controle_exibicao = st.session_state.atribuicoes_servidores.copy()
                         df_controle_exibicao.rename(columns={
                             'NUMERO_PROCESSO': 'Nº Processo',
                             'ORGAO_JULGADOR': 'Órgão Julgador',
-                            'servidor': 'Servidor Atribuído'
+                            'servidor': 'Servidor Atribuído',
+                            'vara': 'Vara'
                         }, inplace=True)
 
-                        st.dataframe(df_controle_exibicao[['Nº Processo', 'vara', 'Órgão Julgador', 'Servidor Atribuído']], use_container_width=True)
+                        st.dataframe(df_controle_exibicao[['Nº Processo', 'Vara', 'Órgão Julgador', 'Servidor Atribuído']], use_container_width=True)
                         
                         if st.button("Limpar Atribuições (Resetar Tabela)", type="secondary"):
                             st.session_state.atribuicoes_servidores = pd.DataFrame(columns=['NUMERO_PROCESSO', 'vara', 'ORGAO_JULGADOR', 'servidor'])
