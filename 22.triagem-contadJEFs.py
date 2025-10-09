@@ -109,17 +109,23 @@ def extrair_data_chegada(data_str):
     """Tenta extrair a data de chegada no formato DD/MM/YYYY para objeto datetime (para DATA_CHEGADA_RAW)."""
     if pd.isna(data_str):
         return pd.NaT
-    data_str = str(data_str)
+    data_str = str(data_str).strip()
     
     # Caso 1: Formato "DD/MM/YYYY, HH:MM:SS" (arquivo Cálculo - Elaborar)
     try:
-        # Tenta a extração da data no formato "DD/MM/YYYY" antes da vírgula
+        # Tenta extrair no formato completo DD/MM/YYYY, HH:MM:SS
+        return datetime.strptime(data_str, '%d/%m/%Y, %H:%M:%S') 
+    except:
+        pass
+    
+    # Caso 2: Se falhar (ex: string parcial), tenta extrair só a data
+    try:
         data_part = data_str.split(',')[0].strip()
         return datetime.strptime(data_part, '%d/%m/%Y')
     except:
         pass
     
-    # Caso 2: Formato Timestamp (arquivo Painel Gerencial)
+    # Caso 3: Formato Timestamp (arquivo Painel Gerencial)
     try:
         if len(data_str) > 10 and data_str.isdigit():
             timestamp_ms = int(data_str)
@@ -203,6 +209,7 @@ def processar_dados(df):
         
         # **CORREÇÃO CRÍTICA**: Converta explicitamente para datetime E remova NaT
         processed_df['data_chegada_obj'] = pd.to_datetime(processed_df['data_chegada_obj'], errors='coerce')
+        # Filtra linhas onde a data não é NaT (removendo falhas de conversão)
         processed_df = processed_df[processed_df['data_chegada_obj'].notna()]
         
         if processed_df.empty:
@@ -220,7 +227,9 @@ def processar_dados(df):
         # Se DIAS não existia, calcula agora
         if 'DIAS' not in processed_df.columns or processed_df['DIAS'].eq(0).all():
              st.info("Calculando coluna 'DIAS' a partir da data de chegada...")
-             processed_df['DIAS'] = (data_referencia - processed_df['data_chegada_obj'].dt.date).dt.days
+             # Garante que a data de chegada é um objeto date (removendo o tempo para o cálculo de dias)
+             data_chegada_date = processed_df['data_chegada_obj'].dt.date
+             processed_df['DIAS'] = (data_referencia - data_chegada_date).apply(lambda x: x.days if x.days >= 0 else 0)
              processed_df['DIAS'] = processed_df['DIAS'].fillna(0).astype(int)
         
         # Ordenar por data de chegada (mais recente primeiro)
@@ -550,8 +559,9 @@ def gerar_csv_atribuicoes(df_atribuicoes):
     # Renomear para o formato final
     df_csv.columns = ['Número do Processo', 'Vara', 'Órgão Julgador', 'Servidor Atribuído']
     
-    # Converter para CSV
-    csv = df_csv.to_csv(index=False, sep=';', encoding='utf-8')
+    # Converter para CSV usando codificação latin-1 para compatibilidade com Excel
+    # e separador ;
+    csv = df_csv.to_csv(index=False, sep=';', encoding='latin-1')
     return csv
 
 # --- FUNÇÃO PRINCIPAL (MAIN) ---
@@ -582,7 +592,7 @@ def main():
     
     if uploaded_file is not None:
         try:
-            # Ler arquivo CSV
+            # Ler arquivo CSV com delimitador ;
             df = pd.read_csv(uploaded_file, delimiter=';', encoding='utf-8')
             
             # 1. Mapear e Padronizar Colunas
@@ -885,8 +895,8 @@ def main():
                         
                         csv_atribuicoes = gerar_csv_atribuicoes(st.session_state.atribuicoes_servidores)
                         if csv_atribuicoes:
-                            # Base64 encoding para o download
-                            csv_b64 = base64.b64encode(csv_atribuicoes.encode('utf-8')).decode()
+                            # Base64 encoding para o download com latin-1
+                            csv_b64 = base64.b64encode(csv_atribuicoes.encode('latin-1')).decode()
                             href = f'<a href="data:text/csv;base64,{csv_b64}" download="atribuicoes_servidores_{get_local_time().strftime("%Y%m%d_%H%M")}.csv">📊 Baixar CSV com Atribuições</a>'
                             st.markdown(href, unsafe_allow_html=True)
                             st.info("O arquivo CSV contém as colunas: Número do Processo, Vara, Órgão Julgador e Servidor Atribuído")
