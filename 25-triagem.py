@@ -68,19 +68,20 @@ SERVIDORES_DISPONIVEIS = [
     "Supervisão 08"
 ]
 
-# --- MAPA DE COLUNAS UNIFICADO ---
+# --- MAPA DE COLUNAS UNIFICADO (ATUALIZADO) ---
 
 # Novo Nome (PADRÃO) -> Lista de Nomes Possíveis nos CSVs
 COLUNA_MAP = {
-    'NUMERO_PROCESSO': ['Número do Processo', 'numeroProcesso'],
+    'NUMERO_PROCESSO': ['Número do Processo', 'numeroProcesso', 'Nº Processo'], # Adicionado 'Nº Processo'
     'POLO_ATIVO': ['Polo Ativo', 'poloAtivo'],
     'POLO_PASSIVO': ['Polo Passivo', 'poloPassivo'],
-    'ORGAO_JULGADOR': ['Órgão Julgador', 'orgaoJulgador'],
-    'ASSUNTO_PRINCIPAL': ['Assunto', 'assuntoPrincipal'],
+    'ORGAO_JULGADOR': ['Órgão Julgador', 'orgaoJulgador', 'Vara'], # 'Vara' pode vir como Orgao Julgador em alguns
+    'ASSUNTO_PRINCIPAL': ['Assunto', 'assuntoPrincipal', 'Assunto Principal'], # Adicionado 'Assunto Principal'
     'TAREFA': ['Tarefa', 'nomeTarefa'],
     'ETIQUETAS': ['Etiquetas', 'tagsProcessoList'],
-    'DIAS': ['Dias'],  # Coluna 'Dias' do primeiro arquivo
-    'DATA_CHEGADA_RAW': ['Data Último Movimento', 'dataChegada'] # Coluna bruta de data para processamento
+    'DIAS': ['Dias'],  
+    'DATA_CHEGADA_RAW': ['Data Último Movimento', 'dataChegada'], # Coluna bruta de data para processamento (PJE Original)
+    'DATA_CHEGADA_FORMATADA': ['Data Chegada'] # Coluna formatada (Arquivos já processados/exportados)
 }
 
 # --- FUNÇÕES AUXILIARES ---
@@ -142,13 +143,33 @@ def processar_dados(df):
         
     # Aplicar processamento de tags
     processed_df['servidor'] = processed_df['ETIQUETAS'].apply(extrair_servidor)
-    processed_df['vara'] = processed_df['ETIQUETAS'].apply(extrair_vara)
-
-    # --- 2. Processar Datas e Calcular Dias ---
+    # Tenta usar a coluna 'ORGAO_JULGADOR' para a 'vara' se a tag falhar
+    if 'ORGAO_JULGADOR' in processed_df.columns:
+         processed_df['vara'] = processed_df['ETIQUETAS'].apply(extrair_vara)
+         # Se a vara não foi identificada pela etiqueta, tenta usar o Orgão Julgador
+         processed_df.loc[processed_df['vara'] == "Vara não identificada", 'vara'] = processed_df['ORGAO_JULGADOR']
+    else:
+        processed_df['vara'] = processed_df['ETIQUETAS'].apply(extrair_vara)
     
-    if 'DATA_CHEGADA_RAW' in processed_df.columns:
-        
-        def extrair_data_chegada(data_str):
+    # --- 2. Processar Datas e Calcular Dias (Melhorado) ---
+    
+    # Variável para armazenar a coluna de data a ser usada
+    data_source_col = None
+
+    if 'DATA_CHEGADA_FORMATADA' in processed_df.columns:
+        data_source_col = 'DATA_CHEGADA_FORMATADA'
+        processed_df['data_chegada_obj'] = pd.to_datetime(
+            processed_df['DATA_CHEGADA_FORMATADA'], 
+            format='%d/%m/%Y', 
+            errors='coerce'
+        )
+        st.info("Usando coluna 'Data Chegada' para cálculo de Mês e Dias.")
+
+    elif 'DATA_CHEGADA_RAW' in processed_df.columns:
+        data_source_col = 'DATA_CHEGADA_RAW'
+        st.info("Usando coluna 'Data Último Movimento' para cálculo de Mês e Dias.")
+
+        def extrair_data_chegada_raw(data_str):
             """Tenta extrair a data de chegada no formato DD/MM/YYYY para objeto datetime."""
             if pd.isna(data_str):
                 return None
@@ -156,7 +177,6 @@ def processar_dados(df):
             
             # Caso 1: Formato "DD/MM/YYYY, HH:MM:SS" (Geralmente PJE+R)
             try:
-                # Tenta formatar a data da forma mais comum
                 data_part = data_str.split(',')[0].strip()
                 return datetime.strptime(data_part, '%d/%m/%Y')
             except:
@@ -164,9 +184,7 @@ def processar_dados(df):
             
             # Caso 2: Formato Timestamp (Geralmente Painel Gerencial)
             try:
-                # O primeiro arquivo usa um timestamp em milissegundos
                 if len(data_str) > 10 and data_str.isdigit():
-                    # Converte de milissegundos para datetime
                     return pd.to_datetime(int(data_str), unit='ms').to_pydatetime()
             except:
                 pass
@@ -174,40 +192,51 @@ def processar_dados(df):
             return None
 
         # Aplica a extração da data
-        processed_df['data_chegada_obj'] = processed_df['DATA_CHEGADA_RAW'].apply(extrair_data_chegada)
-        
+        processed_df['data_chegada_obj'] = processed_df['DATA_CHEGADA_RAW'].apply(extrair_data_chegada_raw)
+    
+    else:
+        # Se nenhuma coluna de data for encontrada, preenche com nulo para evitar erro
+        processed_df['data_chegada_obj'] = pd.NaT
+
+
+    # --- Continuação do Processamento de Data ---
+    if 'data_chegada_obj' in processed_df.columns:
         # Filtra linhas onde a data não pôde ser extraída para evitar erros
         processed_df.dropna(subset=['data_chegada_obj'], inplace=True)
 
-        # Calcula Mês e Dia
-        processed_df['mes'] = processed_df['data_chegada_obj'].dt.month
-        processed_df['dia'] = processed_df['data_chegada_obj'].dt.day
-        
-        # Formatar data de chegada (apenas data)
-        processed_df['data_chegada_formatada'] = processed_df['data_chegada_obj'].dt.strftime('%d/%m/%Y')
-        
-        # Calcular coluna 'DIAS' se não existir
-        if 'DIAS' not in processed_df.columns:
-            # st.info("Calculando coluna 'DIAS' a partir da data de chegada...") # Comentei para evitar spam no app
-            # Definindo uma data de referência (pode ser a data de hoje, mas para consistência, mantive uma data fixa)
-            data_referencia = pd.to_datetime(get_local_time().date())
+        if not processed_df.empty:
+            # Calcula Mês e Dia
+            processed_df['mes'] = processed_df['data_chegada_obj'].dt.month
+            processed_df['dia'] = processed_df['data_chegada_obj'].dt.day
             
-            # Calcular a diferença em dias
-            processed_df['DIAS'] = (data_referencia - processed_df['data_chegada_obj']).dt.days
-            processed_df['DIAS'] = processed_df['DIAS'].fillna(0).astype(int)
+            # Formatar data de chegada (apenas data)
+            processed_df['data_chegada_formatada_final'] = processed_df['data_chegada_obj'].dt.strftime('%d/%m/%Y')
+            
+            # Calcular coluna 'DIAS' se não existir
+            if 'DIAS' not in processed_df.columns:
+                # Definindo uma data de referência (data de hoje)
+                data_referencia = pd.to_datetime(get_local_time().date())
+                
+                # Calcular a diferença em dias
+                processed_df['DIAS'] = (data_referencia - processed_df['data_chegada_obj']).dt.days
+                processed_df['DIAS'] = processed_df['DIAS'].fillna(0).astype(int)
+            
+            # Ordenar por data de chegada (mais recente primeiro)
+            processed_df = processed_df.sort_values('data_chegada_obj', ascending=False)
         
-        # Ordenar por data de chegada (mais recente primeiro)
-        processed_df = processed_df.sort_values('data_chegada_obj', ascending=False)
-        
+    
     # Colunas de saída (usando os nomes padronizados)
-    cols_to_keep = list(COLUNA_MAP.keys()) + ['servidor', 'vara', 'data_chegada_obj', 'mes', 'dia', 'data_chegada_formatada']
+    # Adicionamos a coluna 'data_chegada_formatada_final' para garantir que ela exista sempre
+    cols_to_keep = list(COLUNA_MAP.keys()) + ['servidor', 'vara', 'data_chegada_obj', 'mes', 'dia', 'data_chegada_formatada_final']
     processed_df = processed_df.filter(items=cols_to_keep)
-
+    
+    # Renomeia a coluna de data formatada para ser a principal de exibição
+    if 'data_chegada_formatada_final' in processed_df.columns:
+        processed_df.rename(columns={'data_chegada_formatada_final': 'data_chegada_formatada'}, inplace=True)
+    
     return processed_df
 
-# --- Funções de Estatísticas e Relatórios (Mesmas do código anterior) ---
-# (Manter o corpo das funções de stats e relatórios como estavam, pois elas
-# dependem apenas dos nomes de colunas padronizados, que não mudaram)
+# --- Funções de Estatísticas, Relatórios e Download (Inalteradas) ---
 
 def criar_estatisticas(df):
     """Cria estatísticas usando APENAS nomes de colunas padronizados."""
@@ -511,7 +540,7 @@ def gerar_link_download_pdf(pdf, nome_arquivo):
         st.error(f"Erro ao gerar PDF: {e}")
         return ""
         
-# --- NOVO: FUNÇÃO PARA GERAR CSV DA ATRIBUIÇÃO ---
+# --- FUNÇÃO PARA GERAR CSV DA ATRIBUIÇÃO ---
 def gerar_csv_atribuicoes(df):
     """Gera o conteúdo CSV das atribuições manuais."""
     if df.empty:
@@ -546,7 +575,7 @@ def gerar_csv_atribuicoes(df):
 # --- FUNÇÃO PRINCIPAL (MAIN) ---
 
 def main():
-    # Inicialização da Session State (NOVO: Essencial para a aba de atribuição)
+    # Inicialização da Session State
     if 'atribuicoes_servidores' not in st.session_state:
         st.session_state.atribuicoes_servidores = pd.DataFrame(columns=[
             'NUMERO_PROCESSO', 'vara', 'ORGAO_JULGADOR', 'servidor', 'data_atribuicao', 'POLO_ATIVO', 'ASSUNTO_PRINCIPAL'
@@ -596,10 +625,13 @@ def main():
             df_padronizado = mapear_e_padronizar_colunas(df.copy())
             
             # Garante que a coluna de chave existe antes de adicionar
-            if 'NUMERO_PROCESSO' in df_padronizado.columns:
+            if 'NUMERO_PROCESSO' in df_padronizado.columns and 'ETIQUETAS' in df_padronizado.columns:
                 all_dfs.append(df_padronizado)
+            elif 'NUMERO_PROCESSO' in df_padronizado.columns and 'ETIQUETAS' not in df_padronizado.columns:
+                 # Adiciona mesmo sem etiquetas, para processamento de data
+                 all_dfs.append(df_padronizado)
             else:
-                st.error(f"❌ O arquivo **{uploaded_file.name}** não possui a coluna 'Número do Processo' ou 'numeroProcesso'. Não será incluído na análise.")
+                st.error(f"❌ O arquivo **{uploaded_file.name}** não possui a coluna de Número do Processo. Não será incluído na análise.")
 
         # --- FIM da Lógica de Leitura ---
         
@@ -611,27 +643,22 @@ def main():
             # 1. Unir todos os DataFrames
             df_unificado = pd.concat(all_dfs, ignore_index=True)
             
-            # 2. Remover duplicatas, mantendo a primeira ocorrência (que será do arquivo carregado primeiro ou com mais dados)
-            # A chave é o 'NUMERO_PROCESSO' padronizado
+            # 2. Remover duplicatas, mantendo a primeira ocorrência 
             df_final = df_unificado.drop_duplicates(subset=['NUMERO_PROCESSO'], keep='first')
         
         st.success(f"✅ Análise unificada de **{len(uploaded_files)}** arquivo(s). **{len(df_final)}** processos únicos encontrados.")
         
-        # 3. Processar dados (calcula dias, extrai servidor, etc.)
+        # 3. Processar dados (recalcula mês/dia, extrai servidor, etc.)
         with st.spinner('Processando dados...'):
             processed_df = processar_dados(df_final)
             
-        # 4. Aplicar Atribuições Manuais (Atualiza processed_df com as atribuições da session state)
+        # 4. Aplicar Atribuições Manuais 
         if not st.session_state.atribuicoes_servidores.empty:
-            # Filtrar apenas as colunas necessárias para o merge e garantir que 'servidor' seja atualizado
             df_atribuicoes = st.session_state.atribuicoes_servidores[['NUMERO_PROCESSO', 'servidor']].copy()
 
-            # Usa .loc para atualizar 'servidor' no processed_df onde o processo foi manualmente atribuído
             for index, row in df_atribuicoes.iterrows():
-                # Encontra o índice da linha a ser atualizada no processed_df
                 match_index = processed_df.index[processed_df['NUMERO_PROCESSO'] == row['NUMERO_PROCESSO']]
                 if not match_index.empty:
-                    # Atualiza o servidor (o valor pode ser 'Sem etiqueta', 'Não atribuído' ou o nome do Servidor)
                     processed_df.loc[match_index, 'servidor'] = row['servidor']
                     
         # Recalcula estatísticas após as atribuições serem aplicadas
@@ -640,7 +667,8 @@ def main():
         # Abas para organização
         tab1, tab2, tab3, tab4 = st.tabs(["📊 Visão Geral", "📈 Estatísticas", "🔍 Filtros Avançados", "✍️ Atribuição Manual"])
         
-        # --- Tab 1: Visão Geral (Sem alterações na lógica interna) ---
+        # --- Conteúdo das Abas (Mantido do Código 27) ---
+        
         with tab1:
             st.markdown("### 📊 Dashboard - Visão Geral")
             
@@ -745,7 +773,7 @@ def main():
                 with st.expander("📊 Ver dados - Principais Assuntos"):
                     st.dataframe(stats['assunto'])
 
-        # --- Tab 2: Estatísticas (Sem alterações na lógica interna) ---
+        # --- Tab 2: Estatísticas ---
         with tab2:
             st.markdown("### 📈 Estatísticas Detalhadas")
             
@@ -776,18 +804,16 @@ def main():
                 st.markdown("#### Por Vara")
                 st.dataframe(stats['vara'], use_container_width=True)
 
-        # --- Tab 3: Filtros Avançados (Sem alterações na lógica interna) ---
+        # --- Tab 3: Filtros Avançados ---
         with tab3:
             st.markdown("### 🔍 Filtros Avançados")
             
-            # Garantir que as colunas de filtro existam no processed_df
             if 'servidor' not in processed_df.columns:
                 st.error("Não foi possível processar a coluna de Servidor ('Etiquetas'/'tagsProcessoList'). Os filtros podem estar incompletos.")
                 return
 
             col1, col2, col3 = st.columns(3)
             
-            # Lista de opções de servidor deve incluir os nomes fixos + "Sem etiqueta" + "Não atribuído"
             servidor_options = sorted(processed_df['servidor'].unique())
             
             with col1:
@@ -890,7 +916,7 @@ def main():
             else:
                 st.warning("Nenhum processo encontrado com os filtros aplicados.")
 
-        # --- Tab 4: Atribuição Manual (Sem alterações na lógica interna) ---
+        # --- Tab 4: Atribuição Manual ---
         with tab4:
             st.markdown("### ✍️ Atribuição Manual de Servidores")
             
