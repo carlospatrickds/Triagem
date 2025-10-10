@@ -150,7 +150,7 @@ def processar_dados(df):
     else:
         processed_df['vara'] = processed_df['ETIQUETAS'].apply(extrair_vara)
     
-    # --- 2. Processar Datas e Calcular Dias (ATUALIZADO COM LÓGICA DE RETROAÇÃO) ---
+    # --- 2. Processar Datas e Calcular Dias (LÓGICA DE RETROAÇÃO) ---
     
     processed_df['data_chegada_obj'] = pd.NaT
     
@@ -163,7 +163,7 @@ def processar_dados(df):
             format='%d/%m/%Y', 
             errors='coerce'
         )
-        st.info("Prioridade 1: Usando coluna 'Data Chegada' de arquivo processado.")
+        # st.info("Prioridade 1: Usando coluna 'Data Chegada' de arquivo processado.")
 
     # B. Prioridade 2: Cálculo Retroativo (Data Último Movimento - Dias Transcorridos) - Painel Gerencial
     if processed_df['data_chegada_obj'].isna().all() and 'DATA_ULTIMO_MOVIMENTO_RAW' in processed_df.columns and 'DIAS_TRANSCORRIDOS' in processed_df.columns:
@@ -176,7 +176,10 @@ def processar_dados(df):
                 return pd.NaT
 
             data_mov_raw = str(data_mov_raw)
-            dias_transcorridos = int(dias_transcorridos) # Deve ser um inteiro
+            try:
+                dias_transcorridos = int(dias_transcorridos) # Deve ser um inteiro
+            except ValueError:
+                return pd.NaT
             
             try:
                 # 1. Tentar formato Timestamp (o mais comum no PJE+R)
@@ -194,7 +197,7 @@ def processar_dados(df):
         processed_df.loc[processed_df['data_chegada_obj'].isna(), 'data_chegada_obj'] = processed_df.apply(
             extrair_e_calcular_data, axis=1
         )
-        st.info("Prioridade 2: Calculando 'Data Chegada' retroativamente (Último Movimento - Dias).")
+        # st.info("Prioridade 2: Calculando 'Data Chegada' retroativamente (Último Movimento - Dias).")
         
         # MANTEMOS A COLUNA DIAS ORIGINAL DO PAINEL GERENCIAL
         processed_df['DIAS'] = processed_df['DIAS_TRANSCORRIDOS'].fillna(0).astype(int)
@@ -218,7 +221,7 @@ def processar_dados(df):
         
         # Aplicar a extração da data
         processed_df.loc[processed_df['data_chegada_obj'].isna(), 'data_chegada_obj'] = processed_df['DATA_CHEGADA_RAW'].apply(extrair_data_chegada_raw)
-        st.info("Prioridade 3: Usando coluna 'dataChegada' de arquivo de tarefa simples.")
+        # st.info("Prioridade 3: Usando coluna 'dataChegada' de arquivo de tarefa simples.")
     
     # --- Continuação do Processamento de Data ---
     
@@ -270,18 +273,10 @@ def criar_estatisticas(df):
     stats = {}
     
     # Estatísticas por Polo Passivo
-    if 'POLO_PASSIVO' in df.columns:
-        polo_passivo_stats = df['POLO_PASSIVO'].value_counts().head(10)
-        stats['polo_passivo'] = polo_passivo_stats
-    else:
-        stats['polo_passivo'] = pd.Series(dtype='int64')
+    stats['polo_passivo'] = df['POLO_PASSIVO'].value_counts().head(10) if 'POLO_PASSIVO' in df.columns else pd.Series(dtype='int64')
 
     # Estatísticas por Mês
-    if 'mes' in df.columns:
-        mes_stats = df['mes'].value_counts().sort_index()
-        stats['mes'] = mes_stats
-    else:
-        stats['mes'] = pd.Series(dtype='int64')
+    stats['mes'] = df['mes'].value_counts().sort_index() if 'mes' in df.columns else pd.Series(dtype='int64')
 
     # Estatísticas por Servidor
     if 'servidor' in df.columns:
@@ -295,18 +290,10 @@ def criar_estatisticas(df):
         stats['servidor'] = pd.Series(dtype='int64')
 
     # Estatísticas por Vara
-    if 'vara' in df.columns:
-        vara_stats = df['vara'].value_counts().head(10)
-        stats['vara'] = vara_stats
-    else:
-        stats['vara'] = pd.Series(dtype='int64')
+    stats['vara'] = df['vara'].value_counts().head(10) if 'vara' in df.columns else pd.Series(dtype='int64')
 
     # Estatísticas por Assunto
-    if 'ASSUNTO_PRINCIPAL' in df.columns:
-        assunto_stats = df['ASSUNTO_PRINCIPAL'].value_counts().head(10)
-        stats['assunto'] = assunto_stats
-    else:
-        stats['assunto'] = pd.Series(dtype='int64')
+    stats['assunto'] = df['ASSUNTO_PRINCIPAL'].value_counts().head(10) if 'ASSUNTO_PRINCIPAL' in df.columns else pd.Series(dtype='int64')
     
     return stats
 
@@ -841,13 +828,30 @@ def main():
         with tab3:
             st.markdown("### 🔍 Filtros Avançados")
             
-            if 'servidor' not in processed_df.columns:
-                st.error("Não foi possível processar a coluna de Servidor ('Etiquetas'/'tagsProcessoList'). Os filtros podem estar incompletos.")
+            if processed_df.empty or 'servidor' not in processed_df.columns:
+                st.warning("Não há dados válidos ou a coluna de Servidor não foi encontrada. Filtros indisponíveis.")
                 return
 
             col1, col2, col3 = st.columns(3)
             
             servidor_options = sorted(processed_df['servidor'].unique())
+            
+            # Verificações de colunas para evitar KeyError
+            mes_options = []
+            if 'mes' in processed_df.columns:
+                mes_options = sorted(processed_df['mes'].dropna().unique())
+                
+            assunto_options = []
+            if 'ASSUNTO_PRINCIPAL' in processed_df.columns:
+                assunto_options = sorted(processed_df['ASSUNTO_PRINCIPAL'].dropna().unique())
+                
+            polo_passivo_options = []
+            if 'POLO_PASSIVO' in processed_df.columns:
+                polo_passivo_options = sorted(processed_df['POLO_PASSIVO'].dropna().unique())
+            
+            vara_options = []
+            if 'vara' in processed_df.columns:
+                vara_options = sorted(processed_df['vara'].unique())
             
             with col1:
                 servidor_filter = st.multiselect(
@@ -858,27 +862,27 @@ def main():
                 
                 mes_filter = st.multiselect(
                     "Filtrar por Mês (Chegada)",
-                    options=sorted(processed_df['mes'].dropna().unique()),
+                    options=mes_options, 
                     default=None
                 )
             
             with col2:
                 polo_passivo_filter = st.multiselect(
                     "Filtrar por Polo Passivo",
-                    options=sorted(processed_df['POLO_PASSIVO'].unique()),
+                    options=polo_passivo_options,
                     default=None
                 )
                 
                 assunto_filter = st.multiselect(
                     "Filtrar por Assunto",
-                    options=sorted(processed_df['ASSUNTO_PRINCIPAL'].dropna().unique()),
+                    options=assunto_options,
                     default=None
                 )
             
             with col3:
                 vara_filter = st.multiselect(
                     "Filtrar por Vara",
-                    options=sorted(processed_df['vara'].unique()),
+                    options=vara_options,
                     default=None
                 )
             
@@ -890,19 +894,19 @@ def main():
                 filtered_df = filtered_df[filtered_df['servidor'].isin(servidor_filter)]
                 filtros_aplicados.append(f"Servidor: {', '.join(servidor_filter)}")
             
-            if mes_filter:
+            if mes_filter and 'mes' in filtered_df.columns:
                 filtered_df = filtered_df[filtered_df['mes'].isin(mes_filter)]
                 filtros_aplicados.append(f"Mês (Chegada): {', '.join(map(str, mes_filter))}")
             
-            if polo_passivo_filter:
+            if polo_passivo_filter and 'POLO_PASSIVO' in filtered_df.columns:
                 filtered_df = filtered_df[filtered_df['POLO_PASSIVO'].isin(polo_passivo_filter)]
                 filtros_aplicados.append(f"Polo Passivo: {', '.join(polo_passivo_filter)}")
             
-            if assunto_filter:
+            if assunto_filter and 'ASSUNTO_PRINCIPAL' in filtered_df.columns:
                 filtered_df = filtered_df[filtered_df['ASSUNTO_PRINCIPAL'].isin(assunto_filter)]
                 filtros_aplicados.append(f"Assunto: {', '.join(assunto_filter)}")
             
-            if vara_filter:
+            if vara_filter and 'vara' in filtered_df.columns:
                 filtered_df = filtered_df[filtered_df['vara'].isin(vara_filter)]
                 filtros_aplicados.append(f"Vara: {', '.join(vara_filter)}")
             
