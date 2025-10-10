@@ -161,10 +161,8 @@ def processar_dados(df):
     if 'DATA_CHEGADA_FORMATADA_INPUT' in processed_df.columns:
         processed_df['data_chegada_obj'] = pd.to_datetime(
             processed_df['DATA_CHEGADA_FORMATADA_INPUT'], 
-            format='%d/%m/%Y',
             errors='coerce',
-            # CORREÇÃO CRUCIAL: Forçar o formato Dia/Mês/Ano
-            dayfirst=True 
+            dayfirst=True # <--- REFORÇADO: Garante que o formato é Dia/Mês/Ano
         )
 
     # B. Prioridade 2: Data Chegada de arquivo de tarefa simples (DD/MM/YYYY, HH:MM:SS)
@@ -178,19 +176,23 @@ def processar_dados(df):
             # 1. Tentar formato "DD/MM/YYYY, HH:MM:SS" (Tarefa Simples)
             try:
                 data_part = data_str.split(',')[0].strip()
+                # O strptime é explícito para o formato DMY (Dia/Mês/Ano)
                 return datetime.strptime(data_part, '%d/%m/%Y').date()
             except:
                 pass
             
             # 2. Se falhar, tentar inferir, priorizando DMY (Dia/Mês/Ano)
             try:
-                return pd.to_datetime(data_str, errors='coerce', dayfirst=True).date() 
+                return pd.to_datetime(data_str, errors='coerce', dayfirst=True)
             except:
                 pass
             
             return pd.NaT
         
-        processed_df.loc[processed_df['data_chegada_obj'].isna(), 'data_chegada_obj'] = processed_df['DATA_CHEGADA_RAW'].apply(extrair_data_chegada_raw)
+        data_series = processed_df['DATA_CHEGADA_RAW'].apply(extrair_data_chegada_raw)
+        
+        # Normaliza a data (remove hora) e aplica
+        processed_df.loc[processed_df['data_chegada_obj'].isna(), 'data_chegada_obj'] = data_series.dt.normalize()
     
     
     # C. Prioridade 3: CÁLCULO CORRIGIDO: Data Hoje - Dias Transcorridos (Painel Gerencial)
@@ -590,11 +592,12 @@ def main():
         for uploaded_file in uploaded_files:
             try:
                 # Tenta ler com a codificação padrão e delimitador
-                df = pd.read_csv(uploaded_file, delimiter=';', encoding='utf-8')
+                # ** CORREÇÃO REFORÇADA: Força o formato DMY (Dia/Mês/Ano) na leitura inicial **
+                df = pd.read_csv(uploaded_file, delimiter=';', encoding='utf-8', dayfirst=True)
             except UnicodeDecodeError:
                 # Tenta ler com Latin-1 se o UTF-8 falhar
                 try:
-                    df = pd.read_csv(uploaded_file, delimiter=';', encoding='latin-1')
+                    df = pd.read_csv(uploaded_file, delimiter=';', encoding='latin-1', dayfirst=True)
                 except Exception as e:
                     st.warning(f"⚠️ Não foi possível ler o arquivo **{uploaded_file.name}**. Pulando. (Erro: {e})")
                     continue
