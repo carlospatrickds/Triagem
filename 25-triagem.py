@@ -81,9 +81,9 @@ COLUNA_MAP = {
     'ETIQUETAS': ['Etiquetas', 'tagsProcessoList'],
     # 'DIAS_TRANSCORRIDOS' é a coluna 'Dias' do Painel Gerencial
     'DIAS_TRANSCORRIDOS': ['Dias'],  
-    'DATA_ULTIMO_MOVIMENTO_RAW': ['Data Último Movimento'], # Não usada no cálculo, mantida para informação
-    'DATA_CHEGADA_RAW': ['dataChegada'], # Coluna bruta de data (Tarefa Simples)
-    'DATA_CHEGADA_FORMATADA_INPUT': ['Data Chegada'] # Coluna formatada (Arquivos já processados/exportados)
+    'DATA_ULTIMO_MOVIMENTO_RAW': ['Data Último Movimento'], 
+    'DATA_CHEGADA_RAW': ['dataChegada'], 
+    'DATA_CHEGADA_FORMATADA_INPUT': ['Data Chegada'] 
 }
 
 # --- FUNÇÕES AUXILIARES ---
@@ -161,8 +161,10 @@ def processar_dados(df):
     if 'DATA_CHEGADA_FORMATADA_INPUT' in processed_df.columns:
         processed_df['data_chegada_obj'] = pd.to_datetime(
             processed_df['DATA_CHEGADA_FORMATADA_INPUT'], 
-            format='%d/%m/%Y', 
-            errors='coerce'
+            format='%d/%m/%Y',
+            errors='coerce',
+            # CORREÇÃO CRUCIAL: Forçar o formato Dia/Mês/Ano
+            dayfirst=True 
         )
 
     # B. Prioridade 2: Data Chegada de arquivo de tarefa simples (DD/MM/YYYY, HH:MM:SS)
@@ -173,10 +175,16 @@ def processar_dados(df):
                 return pd.NaT
             data_str = str(data_str)
             
-            # Formato "DD/MM/YYYY, HH:MM:SS" (Geralmente Tarefa Simples)
+            # 1. Tentar formato "DD/MM/YYYY, HH:MM:SS" (Tarefa Simples)
             try:
                 data_part = data_str.split(',')[0].strip()
                 return datetime.strptime(data_part, '%d/%m/%Y').date()
+            except:
+                pass
+            
+            # 2. Se falhar, tentar inferir, priorizando DMY (Dia/Mês/Ano)
+            try:
+                return pd.to_datetime(data_str, errors='coerce', dayfirst=True).date() 
             except:
                 pass
             
@@ -195,9 +203,8 @@ def processar_dados(df):
                 return pd.NaT
             
             try:
-                # O PJE+R sempre calcula a diferença de dias até a data de hoje.
+                # CORREÇÃO: Data de Chegada = Data de Hoje - Dias na Tarefa
                 dias = int(dias_transcorridos)
-                # Data de Chegada = Data de Hoje - Dias na Tarefa
                 return data_referencia - timedelta(days=dias)
             except ValueError:
                 return pd.NaT
@@ -208,7 +215,6 @@ def processar_dados(df):
             calcular_data_chegada_painel_gerencial, axis=1
         )
         
-        # MANTEMOS A COLUNA DIAS ORIGINAL DO PAINEL GERENCIAL
         processed_df['DIAS'] = processed_df['DIAS_TRANSCORRIDOS'].fillna(0).astype(int)
 
     # --- Continuação do Processamento de Data ---
@@ -218,8 +224,7 @@ def processar_dados(df):
 
     if not processed_df.empty:
         
-        # FILTRO DE SANIDADE DE DATA: Remove processos muito antigos
-        # MANTIDO para garantir que só processos relevantes (p.ex., 2024 em diante) sejam considerados
+        # FILTRO DE SANIDADE DE DATA (mantido para limpar ruídos)
         processed_df = processed_df[processed_df['data_chegada_obj'].dt.year >= 2024].copy()
         
         if processed_df.empty:
@@ -234,7 +239,6 @@ def processar_dados(df):
         
         # 4. Se a coluna DIAS não veio do Painel Gerencial (Prioridade 3), calcula o DIAS.
         if 'DIAS' not in processed_df.columns:
-            # Calcular a diferença em dias
             processed_df['DIAS'] = (data_referencia - processed_df['data_chegada_obj']).dt.days
             processed_df['DIAS'] = processed_df['DIAS'].fillna(0).astype(int)
         
@@ -262,13 +266,10 @@ def criar_estatisticas(df):
     
     stats = {}
     
-    # Estatísticas por Polo Passivo
     stats['polo_passivo'] = df['POLO_PASSIVO'].value_counts().head(10) if 'POLO_PASSIVO' in df.columns else pd.Series(dtype='int64')
 
-    # Estatísticas por Mês
     stats['mes'] = df['mes'].value_counts().sort_index() if 'mes' in df.columns else pd.Series(dtype='int64')
 
-    # Estatísticas por Servidor
     if 'servidor' in df.columns:
         servidor_stats = df[~df['servidor'].isin(['Sem etiqueta', 'Não atribuído'])]['servidor'].value_counts()
         nao_atribuidos_count = df[df['servidor'].isin(['Sem etiqueta', 'Não atribuído'])].shape[0]
@@ -279,10 +280,8 @@ def criar_estatisticas(df):
     else:
         stats['servidor'] = pd.Series(dtype='int64')
 
-    # Estatísticas por Vara
     stats['vara'] = df['vara'].value_counts().head(10) if 'vara' in df.columns else pd.Series(dtype='int64')
 
-    # Estatísticas por Assunto
     stats['assunto'] = df['ASSUNTO_PRINCIPAL'].value_counts().head(10) if 'ASSUNTO_PRINCIPAL' in df.columns else pd.Series(dtype='int64')
     
     return stats
@@ -293,7 +292,6 @@ def criar_grafico_barras(dados, titulo, eixo_x, eixo_y):
         eixo_y: dados.values
     })
     
-    # Mapeamento do mês para nome, se for um gráfico de mês
     if eixo_x.lower() == 'mês':
         mes_map = {
             1: 'Jan', 2: 'Fev', 3: 'Mar', 4: 'Abr', 5: 'Mai', 6: 'Jun', 
@@ -323,7 +321,6 @@ def criar_grafico_pizza_com_legenda(dados, titulo):
         'percentual': (dados.values / dados.values.sum() * 100).round(1)
     })
     
-    # Criar labels com valores
     df_plot['label'] = df_plot['categoria'] + ' (' + df_plot['valor'].astype(str) + ' - ' + df_plot['percentual'].astype(str) + '%)'
     
     chart = alt.Chart(df_plot).mark_arc().encode(
@@ -341,7 +338,6 @@ def criar_grafico_pizza_com_legenda(dados, titulo):
 def criar_relatorio_visao_geral(stats, total_processos):
     class PDF(FPDF):
         def header(self):
-            # Cabeçalho
             self.set_font('Arial', 'B', 16)
             self.cell(0, 10, 'PODER JUDICIÁRIO', 0, 1, 'C')
             self.set_font('Arial', 'B', 14)
@@ -353,12 +349,10 @@ def criar_relatorio_visao_geral(stats, total_processos):
     pdf = PDF()
     pdf.add_page()
     
-    # Título do relatório
     pdf.set_font('Arial', 'B', 14)
     pdf.cell(0, 10, 'RELATÓRIO - VISÃO GERAL', 0, 1, 'C')
     pdf.ln(5)
     
-    # Informações gerais
     pdf.set_font('Arial', 'B', 12)
     pdf.cell(0, 8, 'INFORMAÇÕES GERAIS', 0, 1)
     pdf.set_font('Arial', '', 10)
@@ -366,7 +360,6 @@ def criar_relatorio_visao_geral(stats, total_processos):
     pdf.cell(0, 6, f'Data de geração: {get_local_time().strftime("%d/%m/%Y %H:%M")}', 0, 1)
     pdf.ln(10)
     
-    # Estatísticas por Polo Passivo
     pdf.set_font('Arial', 'B', 12)
     pdf.cell(0, 8, 'DISTRIBUIÇÃO POR POLO PASSIVO (Top 10)', 0, 1)
     pdf.set_font('Arial', '', 10)
@@ -374,7 +367,6 @@ def criar_relatorio_visao_geral(stats, total_processos):
         pdf.cell(0, 6, f'{polo}: {quantidade}', 0, 1)
     pdf.ln(5)
     
-    # Estatísticas por Mês
     pdf.set_font('Arial', 'B', 12)
     pdf.cell(0, 8, 'DISTRIBUIÇÃO POR MÊS', 0, 1)
     pdf.set_font('Arial', '', 10)
@@ -383,7 +375,6 @@ def criar_relatorio_visao_geral(stats, total_processos):
         pdf.cell(0, 6, f'{mes_map.get(mes, f"Mês {mes}")}: {quantidade}', 0, 1)
     pdf.ln(5)
     
-    # Estatísticas por Servidor
     pdf.set_font('Arial', 'B', 12)
     pdf.cell(0, 8, 'DISTRIBUIÇÃO POR SERVIDOR', 0, 1)
     pdf.set_font('Arial', '', 10)
@@ -391,14 +382,12 @@ def criar_relatorio_visao_geral(stats, total_processos):
         pdf.cell(0, 6, f'{servidor}: {quantidade}', 0, 1)
     pdf.ln(5)
     
-    # Estatísticas por Assunto
     pdf.set_font('Arial', 'B', 12)
     pdf.cell(0, 8, 'PRINCIPAIS ASSUNTOS (Top 10)', 0, 1)
     pdf.set_font('Arial', '', 10)
     for assunto, quantidade in stats['assunto'].items():
         pdf.cell(0, 6, f'{assunto}: {quantidade}', 0, 1)
     
-    # Data e hora no final
     pdf.ln(10)
     pdf.set_font('Arial', 'I', 8)
     pdf.cell(0, 6, f'Relatório gerado em: {get_local_time().strftime("%d/%m/%Y às %H:%M:%S")}', 0, 1)
@@ -419,17 +408,14 @@ def criar_relatorio_estatisticas(stats):
     pdf = PDF()
     pdf.add_page()
     
-    # Título do relatório
     pdf.set_font('Arial', 'B', 14)
     pdf.cell(0, 10, 'RELATÓRIO - ESTATÍSTICAS DETALHADAS', 0, 1, 'C')
     pdf.ln(5)
     
-    # Informações gerais
     pdf.set_font('Arial', '', 10)
     pdf.cell(0, 6, f'Data de geração: {get_local_time().strftime("%d/%m/%Y %H:%M")}', 0, 1)
     pdf.ln(10)
     
-    # Estatísticas por Polo Passivo
     pdf.set_font('Arial', 'B', 12)
     pdf.cell(0, 8, 'POR POLO PASSIVO (Top 10)', 0, 1)
     pdf.set_font('Arial', '', 10)
@@ -437,7 +423,6 @@ def criar_relatorio_estatisticas(stats):
         pdf.cell(0, 6, f'{polo}: {quantidade}', 0, 1)
     pdf.ln(5)
     
-    # Estatísticas por Mês
     pdf.set_font('Arial', 'B', 12)
     pdf.cell(0, 8, 'POR MÊS', 0, 1)
     pdf.set_font('Arial', '', 10)
@@ -446,7 +431,6 @@ def criar_relatorio_estatisticas(stats):
         pdf.cell(0, 6, f'{mes_map.get(mes, f"Mês {mes}")}: {quantidade}', 0, 1)
     pdf.ln(5)
     
-    # Estatísticas por Servidor
     pdf.set_font('Arial', 'B', 12)
     pdf.cell(0, 8, 'POR SERVIDOR', 0, 1)
     pdf.set_font('Arial', '', 10)
@@ -454,7 +438,6 @@ def criar_relatorio_estatisticas(stats):
         pdf.cell(0, 6, f'{servidor}: {quantidade}', 0, 1)
     pdf.ln(5)
     
-    # Estatísticas por Vara
     pdf.set_font('Arial', 'B', 12)
     pdf.cell(0, 8, 'POR VARA (Top 10)', 0, 1)
     pdf.set_font('Arial', '', 10)
@@ -462,14 +445,12 @@ def criar_relatorio_estatisticas(stats):
         pdf.cell(0, 6, f'{vara}: {quantidade}', 0, 1)
     pdf.ln(5)
     
-    # Estatísticas por Assunto
     pdf.set_font('Arial', 'B', 12)
     pdf.cell(0, 8, 'POR ASSUNTO (Top 10)', 0, 1)
     pdf.set_font('Arial', '', 10)
     for assunto, quantidade in stats['assunto'].items():
         pdf.cell(0, 6, f'{assunto}: {quantidade}', 0, 1)
     
-    # Data e hora no final
     pdf.ln(10)
     pdf.set_font('Arial', 'I', 8)
     pdf.cell(0, 6, f'Relatório gerado em: {get_local_time().strftime("%d/%m/%Y às %H:%M:%S")}', 0, 1)
@@ -490,12 +471,10 @@ def criar_relatorio_filtros(df_filtrado, filtros_aplicados):
     pdf = PDF()
     pdf.add_page()
     
-    # Título do relatório
     pdf.set_font('Arial', 'B', 14)
     pdf.cell(0, 10, 'RELATÓRIO - FILTROS APLICADOS', 0, 1, 'C')
     pdf.ln(5)
     
-    # Informações dos filtros
     pdf.set_font('Arial', 'B', 12)
     pdf.cell(0, 8, 'FILTROS APLICADOS:', 0, 1)
     pdf.set_font('Arial', '', 10)
@@ -507,18 +486,15 @@ def criar_relatorio_filtros(df_filtrado, filtros_aplicados):
     pdf.cell(0, 6, f'Data de geração: {get_local_time().strftime("%d/%m/%Y %H:%M")}', 0, 1)
     pdf.ln(10)
     
-    # Tabela de processos - MOSTRAR TODOS OS PROCESSOS
     if len(df_filtrado) > 0:
         pdf.set_font('Arial', 'B', 9)
         colunas = ['Nº Processo', 'Polo Ativo', 'Data', 'Servidor', 'Assunto']
         larguras = [35, 45, 20, 30, 60]
         
-        # Cabeçalho da tabela
         for i, coluna in enumerate(colunas):
             pdf.cell(larguras[i], 10, coluna, 1, 0, 'C')
         pdf.ln()
         
-        # Dados da tabela - TODOS os processos filtrados
         pdf.set_font('Arial', '', 7)
         for _, row in df_filtrado.iterrows():
             n_processo = str(row['Nº Processo']) if pd.notna(row['Nº Processo']) else ''
@@ -534,7 +510,6 @@ def criar_relatorio_filtros(df_filtrado, filtros_aplicados):
             pdf.cell(larguras[4], 8, assunto[:40], 1)
             pdf.ln()
     
-    # Data e hora no final
     pdf.ln(10)
     pdf.set_font('Arial', 'I', 8)
     pdf.cell(0, 6, f'Relatório gerado em: {get_local_time().strftime("%d/%m/%Y às %H:%M:%S")}', 0, 1)
@@ -559,7 +534,6 @@ def gerar_csv_atribuicoes(df):
         
     df_temp = df.copy()
     
-    # Colunas a serem exportadas e seus novos nomes
     df_temp = df_temp[[
         'NUMERO_PROCESSO', 
         'vara', 
@@ -579,7 +553,6 @@ def gerar_csv_atribuicoes(df):
         'Assunto Principal'
     ]
     
-    # Exportar para CSV com ponto e vírgula como delimitador
     csv_output = df_temp.to_csv(index=False, sep=';', encoding='latin-1')
     return csv_output
 
@@ -632,26 +605,19 @@ def main():
                 st.warning(f"⚠️ Erro inesperado ao ler **{uploaded_file.name}**. Pulando. (Erro: {e})")
                 continue
                 
-            # Mapear e Padronizar Colunas para garantir que o 'NUMERO_PROCESSO' seja consistente
             df_padronizado = mapear_e_padronizar_colunas(df.copy())
             
-            # Garante que a coluna de chave existe antes de adicionar
             if 'NUMERO_PROCESSO' in df_padronizado.columns:
                 all_dfs.append(df_padronizado)
             else:
                 st.error(f"❌ O arquivo **{uploaded_file.name}** não possui a coluna de Número do Processo. Não será incluído na análise.")
 
-        # --- FIM da Lógica de Leitura ---
-        
         if not all_dfs:
             st.error("Nenhum arquivo válido pôde ser lido para a análise.")
             return
 
         with st.spinner(f'Unificando dados de {len(all_dfs)} arquivo(s) e removendo duplicatas...'):
-            # 1. Unir todos os DataFrames
             df_unificado = pd.concat(all_dfs, ignore_index=True)
-            
-            # 2. Remover duplicatas, mantendo a primeira ocorrência 
             df_final = df_unificado.drop_duplicates(subset=['NUMERO_PROCESSO'], keep='first')
         
         st.success(f"✅ Análise unificada de **{len(uploaded_files)}** arquivo(s). **{len(df_final)}** processos únicos encontrados.")
@@ -669,18 +635,14 @@ def main():
                 if not match_index.empty:
                     processed_df.loc[match_index, 'servidor'] = row['servidor']
                     
-        # Recalcula estatísticas após as atribuições serem aplicadas
         stats = criar_estatisticas(processed_df)
                     
-        # Abas para organização
         tab1, tab2, tab3, tab4 = st.tabs(["📊 Visão Geral", "📈 Estatísticas", "🔍 Filtros Avançados", "✍️ Atribuição Manual"])
         
-        # --- Conteúdo das Abas ---
-        
+        # --- Tab 1: Visão Geral ---
         with tab1:
             st.markdown("### 📊 Dashboard - Visão Geral")
             
-            # Botão para gerar relatório
             col1, col2, col3, col4 = st.columns(4)
             with col4:
                 if st.button("📄 Gerar Relatório - Visão Geral", key="relatorio_visao"):
@@ -691,14 +653,12 @@ def main():
                         if href:
                             st.markdown(href, unsafe_allow_html=True)
             
-            # Métricas principais
             col1, col2, col3, col4 = st.columns(4)
             
             with col1:
                 st.metric("Total de Processos Únicos", len(processed_df))
             
             with col2:
-                # Filtra apenas servidores reais (excluindo 'Sem etiqueta' e 'Não atribuído')
                 servidores_reais = processed_df[~processed_df['servidor'].isin(['Sem etiqueta', 'Não atribuído'])]['servidor'].nunique()
                 st.metric("Servidores Atribuídos", servidores_reais)
             
@@ -709,7 +669,6 @@ def main():
             with col4:
                  st.metric("Processos Sem Atribuição", len(processed_df[processed_df['servidor'].isin(['Sem etiqueta', 'Não atribuído'])]))
 
-            # Gráficos principais
             col1, col2 = st.columns(2)
             
             with col1:
@@ -742,7 +701,6 @@ def main():
                 with st.expander("📊 Ver dados - Distribuição por Mês"):
                     st.dataframe(stats['mes'])
             
-            # Gráficos secundários
             col3, col4 = st.columns(2)
             
             with col3:
@@ -783,7 +741,6 @@ def main():
         with tab2:
             st.markdown("### 📈 Estatísticas Detalhadas")
             
-            # Botão para gerar relatório
             col1, col2 = st.columns([3, 1])
             with col2:
                 if st.button("📄 Gerar Relatório - Estatísticas", key="relatorio_estatisticas"):
@@ -822,7 +779,6 @@ def main():
             
             servidor_options = sorted(processed_df['servidor'].unique())
             
-            # Verificações de colunas para evitar KeyError (CORREÇÃO ANTERIOR MANTIDA)
             mes_options = []
             if 'mes' in processed_df.columns:
                 mes_options = sorted(processed_df['mes'].dropna().unique())
@@ -872,7 +828,6 @@ def main():
                     default=None
                 )
             
-            # Aplicar filtros
             filtered_df = processed_df.copy()
             filtros_aplicados = []
             
@@ -901,17 +856,14 @@ def main():
             st.metric("Processos Filtrados", len(filtered_df))
             
             if len(filtered_df) > 0:
-                # Exibir dados filtrados
                 colunas_filtro = [
                     'NUMERO_PROCESSO', 'POLO_ATIVO', 'POLO_PASSIVO', 'data_chegada_formatada',
                     'mes', 'DIAS', 'servidor', 'vara', 'ASSUNTO_PRINCIPAL'
                 ]
                 
-                # Filtra apenas colunas que realmente existem após o processamento
                 colunas_existentes = [col for col in colunas_filtro if col in filtered_df.columns]
                 display_filtered = filtered_df[colunas_existentes].copy()
                 
-                # Renomeia para exibição no Streamlit e para o PDF
                 display_filtered.columns = [
                     'Nº Processo', 'Polo Ativo', 'Polo Passivo', 'Data Chegada',
                     'Mês', 'Dias', 'Servidor', 'Vara', 'Assunto Principal'
@@ -919,7 +871,6 @@ def main():
                 
                 st.dataframe(display_filtered, use_container_width=True)
                 
-                # Botão para gerar relatório PDF
                 st.markdown("---")
                 st.markdown("### 📄 Gerar Relatório com Filtros")
                 
@@ -943,13 +894,10 @@ def main():
         with tab4:
             st.markdown("### ✍️ Atribuição Manual de Servidores")
             
-            # Identificar processos APENAS sem etiqueta de servidor
             processos_sem_etiqueta = processed_df[
-                # Filtra processos que não têm etiqueta OU que têm etiqueta genérica/de servidor diferente da lista
                 (processed_df['servidor'].isin(["Sem etiqueta", "Não atribuído"])) 
             ].copy()
             
-            # Atualizar lista de processos disponíveis (remover os já atribuídos nesta sessão)
             processos_ja_atribuidos = st.session_state.atribuicoes_servidores['NUMERO_PROCESSO'].tolist() if not st.session_state.atribuicoes_servidores.empty else []
             processos_disponiveis = processos_sem_etiqueta[
                 ~processos_sem_etiqueta['NUMERO_PROCESSO'].isin(processos_ja_atribuidos)
@@ -962,7 +910,6 @@ def main():
                 st.markdown(f"**Processos sem servidor atribuído:** {len(processos_disponiveis)}")
                 
                 if len(processos_disponiveis) > 0:
-                    # Seleção de processo para edição
                     processo_selecionado = st.selectbox(
                         "Selecione um processo para atribuir servidor:",
                         options=processos_disponiveis['NUMERO_PROCESSO'].tolist(),
@@ -970,22 +917,18 @@ def main():
                     )
                     
                     if processo_selecionado:
-                        # Informações do processo selecionado
                         processo_info = processos_disponiveis[
                             processos_disponiveis['NUMERO_PROCESSO'] == processo_selecionado
                         ].iloc[0]
                         
                         st.markdown("**Informações do Processo:**")
-                        # --- QUADRO DE INFORMAÇÕES DO PROCESSO ---
                         st.markdown(f"**Número:** {processo_info['NUMERO_PROCESSO']}")
                         st.markdown(f"**Polo Ativo:** {processo_info.get('POLO_ATIVO', 'N/A')}")
                         st.markdown(f"**Polo Passivo:** {processo_info.get('POLO_PASSIVO', 'N/A')}")
                         
-                        # ASSUNTO EM DESTAQUE
                         assunto = processo_info.get('ASSUNTO_PRINCIPAL', 'N/A')
                         st.markdown(f'<div class="assunto-destaque"><strong>Assunto:</strong> {assunto}</div>', unsafe_allow_html=True)
                         
-                        # Determinar Vara Final (usar Órgão Julgador se 'vara' for "Vara não identificada")
                         vara_atual = processo_info.get('vara', 'Vara não identificada')
                         orgao_julgador = processo_info.get('ORGAO_JULGADOR', 'N/A')
                         
@@ -997,19 +940,15 @@ def main():
                         st.markdown(f"**Vara:** {vara_final}")
                         st.markdown(f"**Órgão Julgador:** {orgao_julgador}")
                         st.markdown(f"**Data de Chegada:** {processo_info.get('data_chegada_formatada', 'N/A')} (Há **{processo_info.get('DIAS', '0')}** dias)")
-                        # --- FIM DO QUADRO DE INFORMAÇÕES ---
                         
-                        # Seleção de servidor (usando a lista fixa definida no início do código)
                         novo_servidor = st.selectbox(
                             "Atribuir servidor:",
-                            options=SERVIDORES_DISPONIVEIS, # LISTA FIXA APLICADA AQUI
+                            options=SERVIDORES_DISPONIVEIS, 
                             key="novo_servidor"
                         )
                         
-                        # Botão para aplicar a alteração
                         if st.button("💾 Aplicar Atribuição", key="aplicar_edicao"):
                             
-                            # Criar registro da atribuição
                             atribuicao = {
                                 'NUMERO_PROCESSO': processo_info['NUMERO_PROCESSO'],
                                 'vara': vara_final,
@@ -1020,7 +959,6 @@ def main():
                                 'ASSUNTO_PRINCIPAL': processo_info.get('ASSUNTO_PRINCIPAL', '')
                             }
                             
-                            # Adicionar à session state
                             nova_atribuicao_df = pd.DataFrame([atribuicao])
                             st.session_state.atribuicoes_servidores = pd.concat(
                                 [st.session_state.atribuicoes_servidores, nova_atribuicao_df], 
@@ -1039,7 +977,6 @@ def main():
                 if not st.session_state.atribuicoes_servidores.empty:
                     st.markdown(f"**Total de processos atribuídos:** {len(st.session_state.atribuicoes_servidores)}")
                     
-                    # Exibir processos atribuídos
                     df_exibicao_atribuidos = st.session_state.atribuicoes_servidores[[
                         'NUMERO_PROCESSO', 'vara', 'ORGAO_JULGADOR', 'servidor', 'data_atribuicao'
                     ]].copy()
@@ -1047,13 +984,11 @@ def main():
                     df_exibicao_atribuidos.columns = ['Nº Processo', 'Vara', 'Órgão Julgador', 'Servidor', 'Data/Hora Atribuição']
                     st.dataframe(df_exibicao_atribuidos, use_container_width=True)
                     
-                    # Botão para download do CSV
                     st.markdown("---")
                     st.markdown("#### 📥 Download das Atribuições")
                     
                     csv_atribuicoes = gerar_csv_atribuicoes(st.session_state.atribuicoes_servidores)
                     if csv_atribuicoes:
-                        # Base64 encoding para o download com latin-1
                         csv_b64 = base64.b64encode(csv_atribuicoes.encode('latin-1')).decode()
                         href = f'<a href="data:text/csv;base64,{csv_b64}" download="atribuicoes_servidores_{get_local_time().strftime("%Y%m%d_%H%M")}.csv">📊 Baixar CSV com Atribuições</a>'
                         st.markdown(href, unsafe_allow_html=True)
@@ -1066,10 +1001,7 @@ def main():
                 else:
                     st.info("Nenhum processo atribuído ainda. Use o quadro à esquerda para fazer as primeiras atribuições.")
         
-        # --- FIM DAS ABAS ---
-    
     else:
-        # Tela inicial quando não há arquivo
         st.markdown("""
         <div class="upload-section">
             <h3>👋 Bem-vindo ao Sistema de Gestão de Processos Judiciais</h3>
