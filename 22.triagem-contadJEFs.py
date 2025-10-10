@@ -814,7 +814,7 @@ def main():
                             
                             st.markdown("**Informações do Processo:**")
                             # --- QUADRO DE INFORMAÇÕES DO PROCESSO ---
-                            st.markdown(f'<div class="info-processo">', unsafe_allow_html=True)
+                            #st.markdown(f'<div class="info-processo">', unsafe_allow_html=True)
                             st.markdown(f"**Número:** {processo_info['NUMERO_PROCESSO']}")
                             st.markdown(f"**Polo Ativo:** {processo_info.get('POLO_ATIVO', 'N/A')}")
                             st.markdown(f"**Polo Passivo:** {processo_info.get('POLO_PASSIVO', 'N/A')}")
