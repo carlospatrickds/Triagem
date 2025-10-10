@@ -211,13 +211,13 @@ def processar_dados(df):
 
     # --- Continuação do Processamento de Data ---
     
-    # 1. Filtra linhas onde a data não pôde ser extraída para evitar erros
+    # 1. Filtra linhas onde a data não pôde ser extraída para evitar erros (Mantido)
     processed_df.dropna(subset=['data_chegada_obj'], inplace=True)
 
     if not processed_df.empty:
         
-        # FILTRO DE SANIDADE DE DATA (mantido para limpar ruídos)
-        processed_df = processed_df[processed_df['data_chegada_obj'].dt.year >= 2024].copy()
+        # FILTRO DE SANIDADE DE DATA (REMOVIDO PARA INCLUIR PROCESSOS MAIS ANTIGOS, COMO OS 3 QUE FALTAVAM)
+        # processed_df = processed_df[processed_df['data_chegada_obj'].dt.year >= 2024].copy()
         
         if processed_df.empty:
              return processed_df
@@ -888,4 +888,125 @@ def main():
             st.markdown("### ✍️ Atribuição Manual de Servidores")
             
             processos_sem_etiqueta = processed_df[
-                (processed_df['servidor
+                (processed_df['servidor'].isin(["Sem etiqueta", "Não atribuído"])) 
+            ].copy()
+            
+            processos_ja_atribuidos = st.session_state.atribuicoes_servidores['NUMERO_PROCESSO'].tolist() if not st.session_state.atribuicoes_servidores.empty else []
+            processos_disponiveis = processos_sem_etiqueta[
+                ~processos_sem_etiqueta['NUMERO_PROCESSO'].isin(processos_ja_atribuidos)
+            ]
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("#### 📋 Processos para Atribuição")
+                st.markdown(f"**Processos sem servidor atribuído:** {len(processos_disponiveis)}")
+                
+                
+                # ... (Restante da função main para a Tab 4)
+                if not processos_disponiveis.empty:
+                    # Filtra os 10 mais antigos
+                    processos_para_atribuir = processos_disponiveis.sort_values(
+                        by=['data_chegada_obj', 'NUMERO_PROCESSO'], 
+                        ascending=[True, True]
+                    ).head(10).copy()
+                    
+                    st.dataframe(
+                        processos_para_atribuir[[
+                            'NUMERO_PROCESSO', 'POLO_ATIVO', 'data_chegada_formatada', 'DIAS', 'ASSUNTO_PRINCIPAL'
+                        ]].rename(columns={
+                            'NUMERO_PROCESSO': 'Nº Processo',
+                            'POLO_ATIVO': 'Polo Ativo',
+                            'data_chegada_formatada': 'Data Chegada',
+                            'ASSUNTO_PRINCIPAL': 'Assunto Principal'
+                        }),
+                        use_container_width=True
+                    )
+                    
+                    st.markdown("---")
+                    
+                    st.markdown("#### Atribuir em Lote")
+                    processos_selecionados = st.multiselect(
+                        "Selecione o(s) N° Processo(s) a serem atribuídos:",
+                        options=processos_para_atribuir['NUMERO_PROCESSO'].tolist(),
+                        key='multiselect_atribuicao'
+                    )
+                    
+                    servidor_selecionado = st.selectbox(
+                        "Selecione o Servidor:",
+                        options=[""] + SERVIDORES_DISPONIVEIS,
+                        key='selectbox_servidor'
+                    )
+                    
+                    if st.button("✅ Confirmar Atribuição em Lote"):
+                        if processos_selecionados and servidor_selecionado:
+                            novas_atribuicoes_list = []
+                            for num_processo in processos_selecionados:
+                                row_data = processed_df[processed_df['NUMERO_PROCESSO'] == num_processo].iloc[0].to_dict()
+                                
+                                novas_atribuicoes_list.append({
+                                    'NUMERO_PROCESSO': num_processo,
+                                    'vara': row_data.get('vara', ''),
+                                    'ORGAO_JULGADOR': row_data.get('ORGAO_JULGADOR', ''),
+                                    'servidor': servidor_selecionado,
+                                    'data_atribuicao': get_local_time().strftime("%d/%m/%Y %H:%M:%S"),
+                                    'POLO_ATIVO': row_data.get('POLO_ATIVO', ''),
+                                    'ASSUNTO_PRINCIPAL': row_data.get('ASSUNTO_PRINCIPAL', '')
+                                })
+                            
+                            novas_atribuicoes_df = pd.DataFrame(novas_atribuicoes_list)
+                            
+                            # Remove as atribuições antigas para os processos selecionados, se existirem
+                            st.session_state.atribuicoes_servidores = st.session_state.atribuicoes_servidores[
+                                ~st.session_state.atribuicoes_servidores['NUMERO_PROCESSO'].isin(processos_selecionados)
+                            ]
+                            
+                            # Adiciona as novas atribuições
+                            st.session_state.atribuicoes_servidores = pd.concat([
+                                st.session_state.atribuicoes_servidores, 
+                                novas_atribuicoes_df
+                            ], ignore_index=True)
+                            
+                            st.success(f"**{len(processos_selecionados)}** processos atribuídos a **{servidor_selecionado}**.")
+                            st.rerun()
+                        else:
+                            st.warning("Selecione os processos e o servidor.")
+                else:
+                    st.info("Todos os processos sem etiqueta foram atribuídos manualmente ou não há dados.")
+                
+            with col2:
+                st.markdown("#### Histórico de Atribuições Manuais")
+                st.markdown(f"**Total de Atribuições Manuais:** {len(st.session_state.atribuicoes_servidores)}")
+                
+                if not st.session_state.atribuicoes_servidores.empty:
+                    df_historico = st.session_state.atribuicoes_servidores.copy()
+                    
+                    # Garantir que as colunas existem antes de tentar renomear e exibir
+                    cols_to_display = ['NUMERO_PROCESSO', 'servidor', 'data_atribuicao']
+                    df_historico = df_historico.filter(items=cols_to_display)
+
+                    if not df_historico.empty:
+                        df_historico.columns = ['Nº Processo', 'Servidor', 'Data Atribuição']
+                        st.dataframe(df_historico, use_container_width=True)
+                        
+                        st.markdown("---")
+                        
+                        # Botão de download das atribuições
+                        csv_atribuicoes = gerar_csv_atribuicoes(st.session_state.atribuicoes_servidores)
+                        if csv_atribuicoes:
+                             st.download_button(
+                                "📥 Baixar Atribuições Manuais (CSV)",
+                                data=csv_atribuicoes,
+                                file_name=f"atribuicoes_manuais_{get_local_time().strftime('%Y%m%d_%H%M')}.csv",
+                                mime='text/csv'
+                            )
+                        
+                        # Botão para limpar atribuições
+                        if st.button("🗑️ Limpar todas Atribuições Manuais", help="Isso apagará todas as atribuições salvas na sessão."):
+                            st.session_state.atribuicoes_servidores = pd.DataFrame(columns=[
+                                'NUMERO_PROCESSO', 'vara', 'ORGAO_JULGADOR', 'servidor', 'data_atribuicao', 'POLO_ATIVO', 'ASSUNTO_PRINCIPAL'
+                            ])
+                            st.success("Atribuições manuais limpas. Recarregando...")
+                            st.rerun()
+
+main()
