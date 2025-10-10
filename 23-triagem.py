@@ -55,13 +55,18 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- LISTA FIXA DE SERVIDORES (Necessário para a nova aba) ---
-# Você pode editar esta lista conforme seus servidores reais.
+# --- LISTA FIXA DE SERVIDORES (Atualizada conforme sua solicitação) ---
+# Você deve editar esta lista para refletir os nomes exatos.
 SERVIDORES_DISPONIVEIS = [
-    "Servidor A",
-    "Servidor B",
-    "Servidor C",
-    "Supervisão Z"
+    "Servidor 01",
+    "Servidor 02",
+    "Servidor 03",
+    "Servidor 04",
+    "Servidor 05",
+    "Servidor 06",
+    "Servidor 07 - ES",
+    "Servidor 09 - ES",
+    "Supervisão 08"
 ]
 
 # --- MAPA DE COLUNAS UNIFICADO ---
