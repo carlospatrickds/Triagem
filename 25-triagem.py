@@ -72,16 +72,18 @@ SERVIDORES_DISPONIVEIS = [
 
 # Novo Nome (PADRÃO) -> Lista de Nomes Possíveis nos CSVs
 COLUNA_MAP = {
-    'NUMERO_PROCESSO': ['Número do Processo', 'numeroProcesso', 'Nº Processo'], # Adicionado 'Nº Processo'
+    'NUMERO_PROCESSO': ['Número do Processo', 'numeroProcesso', 'Nº Processo'], 
     'POLO_ATIVO': ['Polo Ativo', 'poloAtivo'],
     'POLO_PASSIVO': ['Polo Passivo', 'poloPassivo'],
-    'ORGAO_JULGADOR': ['Órgão Julgador', 'orgaoJulgador', 'Vara'], # 'Vara' pode vir como Orgao Julgador em alguns
-    'ASSUNTO_PRINCIPAL': ['Assunto', 'assuntoPrincipal', 'Assunto Principal'], # Adicionado 'Assunto Principal'
+    'ORGAO_JULGADOR': ['Órgão Julgador', 'orgaoJulgador', 'Vara'], 
+    'ASSUNTO_PRINCIPAL': ['Assunto', 'assuntoPrincipal', 'Assunto Principal'], 
     'TAREFA': ['Tarefa', 'nomeTarefa'],
     'ETIQUETAS': ['Etiquetas', 'tagsProcessoList'],
-    'DIAS': ['Dias'],  
-    'DATA_CHEGADA_RAW': ['Data Último Movimento', 'dataChegada'], # Coluna bruta de data para processamento (PJE Original)
-    'DATA_CHEGADA_FORMATADA': ['Data Chegada'] # Coluna formatada (Arquivos já processados/exportados)
+    # A coluna 'DIAS' agora é crucial para o cálculo do Painel Gerencial
+    'DIAS_TRANSCORRIDOS': ['Dias'],  
+    'DATA_ULTIMO_MOVIMENTO_RAW': ['Data Último Movimento'], # Coluna bruta de data (Painel Gerencial)
+    'DATA_CHEGADA_RAW': ['dataChegada'], # Coluna bruta de data (Tarefa Simples)
+    'DATA_CHEGADA_FORMATADA_INPUT': ['Data Chegada'] # Coluna formatada (Arquivos já processados/exportados)
 }
 
 # --- FUNÇÕES AUXILIARES ---
@@ -124,13 +126,11 @@ def processar_dados(df):
             return "Sem etiqueta"
         tags_list = str(tags).split(', ')
         for tag in tags_list:
-            # Verifica se a tag corresponde a algum nome da lista fixa para garantir consistência
             if tag in SERVIDORES_DISPONIVEIS:
                 return tag
-            # Lógica alternativa para tags genéricas de servidor (mantida por segurança)
             if 'Servidor' in tag or 'Supervisão' in tag:
                 return tag
-        return "Não atribuído" # Novo status: Tem etiqueta, mas nenhuma delas é de servidor
+        return "Não atribuído"
     
     def extrair_vara(tags):
         if pd.isna(tags):
@@ -143,7 +143,6 @@ def processar_dados(df):
         
     # Aplicar processamento de tags
     processed_df['servidor'] = processed_df['ETIQUETAS'].apply(extrair_servidor)
-    # Tenta usar a coluna 'ORGAO_JULGADOR' para a 'vara' se a tag falhar
     if 'ORGAO_JULGADOR' in processed_df.columns:
          processed_df['vara'] = processed_df['ETIQUETAS'].apply(extrair_vara)
          # Se a vara não foi identificada pela etiqueta, tenta usar o Orgão Julgador
@@ -151,86 +150,113 @@ def processar_dados(df):
     else:
         processed_df['vara'] = processed_df['ETIQUETAS'].apply(extrair_vara)
     
-    # --- 2. Processar Datas e Calcular Dias (Melhorado) ---
+    # --- 2. Processar Datas e Calcular Dias (ATUALIZADO COM LÓGICA DE RETROAÇÃO) ---
     
-    # Variável para armazenar a coluna de data a ser usada
-    data_source_col = None
-
-    if 'DATA_CHEGADA_FORMATADA' in processed_df.columns:
-        data_source_col = 'DATA_CHEGADA_FORMATADA'
+    processed_df['data_chegada_obj'] = pd.NaT
+    
+    # --- Lógica de Prioridade de Data ---
+    
+    # A. Prioridade 1: Data Chegada de arquivos já processados/exportados (DD/MM/YYYY)
+    if 'DATA_CHEGADA_FORMATADA_INPUT' in processed_df.columns:
         processed_df['data_chegada_obj'] = pd.to_datetime(
-            processed_df['DATA_CHEGADA_FORMATADA'], 
+            processed_df['DATA_CHEGADA_FORMATADA_INPUT'], 
             format='%d/%m/%Y', 
             errors='coerce'
         )
-        st.info("Usando coluna 'Data Chegada' para cálculo de Mês e Dias.")
+        st.info("Prioridade 1: Usando coluna 'Data Chegada' de arquivo processado.")
 
-    elif 'DATA_CHEGADA_RAW' in processed_df.columns:
-        data_source_col = 'DATA_CHEGADA_RAW'
-        st.info("Usando coluna 'Data Último Movimento' para cálculo de Mês e Dias.")
+    # B. Prioridade 2: Cálculo Retroativo (Data Último Movimento - Dias Transcorridos) - Painel Gerencial
+    if processed_df['data_chegada_obj'].isna().all() and 'DATA_ULTIMO_MOVIMENTO_RAW' in processed_df.columns and 'DIAS_TRANSCORRIDOS' in processed_df.columns:
+        
+        def extrair_e_calcular_data(row):
+            data_mov_raw = row['DATA_ULTIMO_MOVIMENTO_RAW']
+            dias_transcorridos = row['DIAS_TRANSCORRIDOS']
+            
+            if pd.isna(data_mov_raw) or pd.isna(dias_transcorridos):
+                return pd.NaT
 
+            data_mov_raw = str(data_mov_raw)
+            dias_transcorridos = int(dias_transcorridos) # Deve ser um inteiro
+            
+            try:
+                # 1. Tentar formato Timestamp (o mais comum no PJE+R)
+                if len(data_mov_raw) > 10 and data_mov_raw.isdigit():
+                    data_mov_obj = pd.to_datetime(int(data_mov_raw), unit='ms').normalize()
+                    # Subtrai os dias para obter a data de chegada real
+                    return data_mov_obj - timedelta(days=dias_transcorridos)
+                
+            except:
+                pass
+                
+            return pd.NaT # Se falhar
+
+        # Aplicar a função de cálculo retroativo APENAS onde a data ainda é NaT
+        processed_df.loc[processed_df['data_chegada_obj'].isna(), 'data_chegada_obj'] = processed_df.apply(
+            extrair_e_calcular_data, axis=1
+        )
+        st.info("Prioridade 2: Calculando 'Data Chegada' retroativamente (Último Movimento - Dias).")
+        
+        # MANTEMOS A COLUNA DIAS ORIGINAL DO PAINEL GERENCIAL
+        processed_df['DIAS'] = processed_df['DIAS_TRANSCORRIDOS'].fillna(0).astype(int)
+
+    # C. Prioridade 3: Data Chegada de arquivo de tarefa simples (DD/MM/YYYY, HH:MM:SS)
+    if processed_df['data_chegada_obj'].isna().all() and 'DATA_CHEGADA_RAW' in processed_df.columns:
+        
         def extrair_data_chegada_raw(data_str):
-            """Tenta extrair a data de chegada no formato DD/MM/YYYY para objeto datetime."""
             if pd.isna(data_str):
-                return None
+                return pd.NaT
             data_str = str(data_str)
             
-            # Caso 1: Formato "DD/MM/YYYY, HH:MM:SS" (Geralmente PJE+R)
+            # Formato "DD/MM/YYYY, HH:MM:SS" (Geralmente Tarefa Simples)
             try:
                 data_part = data_str.split(',')[0].strip()
-                return datetime.strptime(data_part, '%d/%m/%Y')
+                return datetime.strptime(data_part, '%d/%m/%Y').date()
             except:
                 pass
             
-            # Caso 2: Formato Timestamp (Geralmente Painel Gerencial)
-            try:
-                if len(data_str) > 10 and data_str.isdigit():
-                    return pd.to_datetime(int(data_str), unit='ms').to_pydatetime()
-            except:
-                pass
-                
-            return None
-
-        # Aplica a extração da data
-        processed_df['data_chegada_obj'] = processed_df['DATA_CHEGADA_RAW'].apply(extrair_data_chegada_raw)
-    
-    else:
-        # Se nenhuma coluna de data for encontrada, preenche com nulo para evitar erro
-        processed_df['data_chegada_obj'] = pd.NaT
-
-
-    # --- Continuação do Processamento de Data ---
-    if 'data_chegada_obj' in processed_df.columns:
-        # Filtra linhas onde a data não pôde ser extraída para evitar erros
-        processed_df.dropna(subset=['data_chegada_obj'], inplace=True)
-
-        if not processed_df.empty:
-            # Calcula Mês e Dia
-            processed_df['mes'] = processed_df['data_chegada_obj'].dt.month
-            processed_df['dia'] = processed_df['data_chegada_obj'].dt.day
-            
-            # Formatar data de chegada (apenas data)
-            processed_df['data_chegada_formatada_final'] = processed_df['data_chegada_obj'].dt.strftime('%d/%m/%Y')
-            
-            # Calcular coluna 'DIAS' se não existir
-            if 'DIAS' not in processed_df.columns:
-                # Definindo uma data de referência (data de hoje)
-                data_referencia = pd.to_datetime(get_local_time().date())
-                
-                # Calcular a diferença em dias
-                processed_df['DIAS'] = (data_referencia - processed_df['data_chegada_obj']).dt.days
-                processed_df['DIAS'] = processed_df['DIAS'].fillna(0).astype(int)
-            
-            # Ordenar por data de chegada (mais recente primeiro)
-            processed_df = processed_df.sort_values('data_chegada_obj', ascending=False)
+            return pd.NaT
         
+        # Aplicar a extração da data
+        processed_df.loc[processed_df['data_chegada_obj'].isna(), 'data_chegada_obj'] = processed_df['DATA_CHEGADA_RAW'].apply(extrair_data_chegada_raw)
+        st.info("Prioridade 3: Usando coluna 'dataChegada' de arquivo de tarefa simples.")
+    
+    # --- Continuação do Processamento de Data ---
+    
+    # Filtra linhas onde a data não pôde ser extraída para evitar erros
+    processed_df.dropna(subset=['data_chegada_obj'], inplace=True)
+
+    if not processed_df.empty:
+        # Calcula Mês e Dia a partir da DATA DE CHEGADA CALCULADA
+        processed_df['mes'] = processed_df['data_chegada_obj'].dt.month
+        processed_df['dia'] = processed_df['data_chegada_obj'].dt.day
+        
+        # Formatar data de chegada (apenas data)
+        processed_df['data_chegada_formatada_final'] = processed_df['data_chegada_obj'].dt.strftime('%d/%m/%Y')
+        
+        # Se a coluna DIAS não veio do Painel Gerencial (Prioridade 2), calcula o DIAS.
+        if 'DIAS' not in processed_df.columns:
+            # Definindo uma data de referência (data de hoje)
+            data_referencia = pd.to_datetime(get_local_time().date())
+            
+            # Calcular a diferença em dias
+            processed_df['DIAS'] = (data_referencia - processed_df['data_chegada_obj']).dt.days
+            processed_df['DIAS'] = processed_df['DIAS'].fillna(0).astype(int)
+        
+        # Ordenar por data de chegada (mais recente primeiro)
+        processed_df = processed_df.sort_values('data_chegada_obj', ascending=False)
+    
     
     # Colunas de saída (usando os nomes padronizados)
-    # Adicionamos a coluna 'data_chegada_formatada_final' para garantir que ela exista sempre
-    cols_to_keep = list(COLUNA_MAP.keys()) + ['servidor', 'vara', 'data_chegada_obj', 'mes', 'dia', 'data_chegada_formatada_final']
+    # Remove as colunas RAW e FORMATADA_INPUT
+    cols_to_remove = ['DATA_ULTIMO_MOVIMENTO_RAW', 'DATA_CHEGADA_RAW', 'DATA_CHEGADA_FORMATADA_INPUT', 'DIAS_TRANSCORRIDOS']
+    cols_to_keep = [col for col in list(COLUNA_MAP.keys()) + ['servidor', 'vara', 'data_chegada_obj', 'mes', 'dia', 'data_chegada_formatada_final', 'DIAS'] if col not in cols_to_remove]
+    
+    # Garante que não haja duplicatas de colunas
+    cols_to_keep = list(dict.fromkeys(cols_to_keep))
+    
+    # Filtra e renomeia
     processed_df = processed_df.filter(items=cols_to_keep)
     
-    # Renomeia a coluna de data formatada para ser a principal de exibição
     if 'data_chegada_formatada_final' in processed_df.columns:
         processed_df.rename(columns={'data_chegada_formatada_final': 'data_chegada_formatada'}, inplace=True)
     
@@ -259,9 +285,7 @@ def criar_estatisticas(df):
 
     # Estatísticas por Servidor
     if 'servidor' in df.columns:
-        # Novo: Filtra "Sem etiqueta" e "Não atribuído" das estatísticas
         servidor_stats = df[~df['servidor'].isin(['Sem etiqueta', 'Não atribuído'])]['servidor'].value_counts()
-        # Adiciona a contagem de "Sem etiqueta" e "Não atribuído" separadamente, se houver
         nao_atribuidos_count = df[df['servidor'].isin(['Sem etiqueta', 'Não atribuído'])].shape[0]
         if nao_atribuidos_count > 0:
             servidor_stats['Sem ou Não Atribuído'] = nao_atribuidos_count
@@ -292,10 +316,21 @@ def criar_grafico_barras(dados, titulo, eixo_x, eixo_y):
         eixo_y: dados.values
     })
     
+    # Mapeamento do mês para nome, se for um gráfico de mês
+    if eixo_x.lower() == 'mês':
+        mes_map = {
+            1: 'Jan', 2: 'Fev', 3: 'Mar', 4: 'Abr', 5: 'Mai', 6: 'Jun', 
+            7: 'Jul', 8: 'Ago', 9: 'Set', 10: 'Out', 11: 'Nov', 12: 'Dez'
+        }
+        df_plot['Mês Nome'] = df_plot[eixo_x].map(mes_map).fillna(df_plot[eixo_x].astype(str))
+        eixo_x_display = 'Mês Nome'
+    else:
+        eixo_x_display = eixo_x
+    
     chart = alt.Chart(df_plot).mark_bar().encode(
-        x=alt.X(f'{eixo_x}:N', title=eixo_x, axis=alt.Axis(labelAngle=-45), sort='-y'),
+        x=alt.X(f'{eixo_x_display}:N', title=eixo_x, axis=alt.Axis(labelAngle=-45), sort='-y'),
         y=alt.Y(f'{eixo_y}:Q', title=eixo_y),
-        tooltip=[eixo_x, eixo_y]
+        tooltip=[eixo_x_display, eixo_y]
     ).properties(
         title=titulo,
         width=600,
@@ -326,6 +361,7 @@ def criar_grafico_pizza_com_legenda(dados, titulo):
     
     return chart
 
+# Funções de Relatórios PDF (Inalteradas)
 def criar_relatorio_visao_geral(stats, total_processos):
     class PDF(FPDF):
         def header(self):
@@ -366,8 +402,9 @@ def criar_relatorio_visao_geral(stats, total_processos):
     pdf.set_font('Arial', 'B', 12)
     pdf.cell(0, 8, 'DISTRIBUIÇÃO POR MÊS', 0, 1)
     pdf.set_font('Arial', '', 10)
+    mes_map = {1: 'Janeiro', 2: 'Fevereiro', 3: 'Março', 4: 'Abril', 5: 'Maio', 6: 'Junho', 7: 'Julho', 8: 'Agosto', 9: 'Setembro', 10: 'Outubro', 11: 'Novembro', 12: 'Dezembro'}
     for mes, quantidade in stats['mes'].items():
-        pdf.cell(0, 6, f'Mês {mes}: {quantidade}', 0, 1)
+        pdf.cell(0, 6, f'{mes_map.get(mes, f"Mês {mes}")}: {quantidade}', 0, 1)
     pdf.ln(5)
     
     # Estatísticas por Servidor
@@ -428,8 +465,9 @@ def criar_relatorio_estatisticas(stats):
     pdf.set_font('Arial', 'B', 12)
     pdf.cell(0, 8, 'POR MÊS', 0, 1)
     pdf.set_font('Arial', '', 10)
+    mes_map = {1: 'Janeiro', 2: 'Fevereiro', 3: 'Março', 4: 'Abril', 5: 'Maio', 6: 'Junho', 7: 'Julho', 8: 'Agosto', 9: 'Setembro', 10: 'Outubro', 11: 'Novembro', 12: 'Dezembro'}
     for mes, quantidade in stats['mes'].items():
-        pdf.cell(0, 6, f'Mês {mes}: {quantidade}', 0, 1)
+        pdf.cell(0, 6, f'{mes_map.get(mes, f"Mês {mes}")}: {quantidade}', 0, 1)
     pdf.ln(5)
     
     # Estatísticas por Servidor
@@ -532,15 +570,15 @@ def criar_relatorio_filtros(df_filtrado, filtros_aplicados):
 def gerar_link_download_pdf(pdf, nome_arquivo):
     """Gera link de download para o PDF"""
     try:
-        pdf_output = pdf.output()
-        b64 = base64.b64encode(pdf_output).decode()
+        # Pega a string de bytes do PDF
+        pdf_output = pdf.output(dest='S').encode('latin-1')
+        b64 = base64.b64encode(pdf_output).decode('latin-1')
         href = f'<a href="data:application/octet-stream;base64,{b64}" download="{nome_arquivo}">📄 Baixar Relatório PDF</a>'
         return href
     except Exception as e:
         st.error(f"Erro ao gerar PDF: {e}")
         return ""
-        
-# --- FUNÇÃO PARA GERAR CSV DA ATRIBUIÇÃO ---
+
 def gerar_csv_atribuicoes(df):
     """Gera o conteúdo CSV das atribuições manuais."""
     if df.empty:
@@ -625,11 +663,8 @@ def main():
             df_padronizado = mapear_e_padronizar_colunas(df.copy())
             
             # Garante que a coluna de chave existe antes de adicionar
-            if 'NUMERO_PROCESSO' in df_padronizado.columns and 'ETIQUETAS' in df_padronizado.columns:
+            if 'NUMERO_PROCESSO' in df_padronizado.columns:
                 all_dfs.append(df_padronizado)
-            elif 'NUMERO_PROCESSO' in df_padronizado.columns and 'ETIQUETAS' not in df_padronizado.columns:
-                 # Adiciona mesmo sem etiquetas, para processamento de data
-                 all_dfs.append(df_padronizado)
             else:
                 st.error(f"❌ O arquivo **{uploaded_file.name}** não possui a coluna de Número do Processo. Não será incluído na análise.")
 
@@ -667,7 +702,7 @@ def main():
         # Abas para organização
         tab1, tab2, tab3, tab4 = st.tabs(["📊 Visão Geral", "📈 Estatísticas", "🔍 Filtros Avançados", "✍️ Atribuição Manual"])
         
-        # --- Conteúdo das Abas (Mantido do Código 27) ---
+        # --- Conteúdo das Abas ---
         
         with tab1:
             st.markdown("### 📊 Dashboard - Visão Geral")
@@ -724,7 +759,7 @@ def main():
                     st.altair_chart(
                         criar_grafico_barras(
                             stats['mes'], 
-                            "Distribuição por Mês", 
+                            "Distribuição por Mês (Data de Chegada)", 
                             "Mês", 
                             "Quantidade"
                         ), 
@@ -747,7 +782,6 @@ def main():
                         use_container_width=True
                     )
                 
-                # NOVO: Expander para dados de Servidor
                 with st.expander("📊 Ver dados - Distribuição por Servidor"):
                     st.dataframe(stats['servidor'])
             
@@ -769,7 +803,6 @@ def main():
                     )
                     st.altair_chart(chart_assunto, use_container_width=True)
                 
-                # NOVO: Expander para dados de Assuntos
                 with st.expander("📊 Ver dados - Principais Assuntos"):
                     st.dataframe(stats['assunto'])
 
@@ -798,7 +831,7 @@ def main():
                 st.dataframe(stats['servidor'], use_container_width=True)
             
             with col2:
-                st.markdown("#### Por Mês")
+                st.markdown("#### Por Mês (Data de Chegada)")
                 st.dataframe(stats['mes'], use_container_width=True)
                 
                 st.markdown("#### Por Vara")
@@ -824,7 +857,7 @@ def main():
                 )
                 
                 mes_filter = st.multiselect(
-                    "Filtrar por Mês",
+                    "Filtrar por Mês (Chegada)",
                     options=sorted(processed_df['mes'].dropna().unique()),
                     default=None
                 )
@@ -859,7 +892,7 @@ def main():
             
             if mes_filter:
                 filtered_df = filtered_df[filtered_df['mes'].isin(mes_filter)]
-                filtros_aplicados.append(f"Mês: {', '.join(map(str, mes_filter))}")
+                filtros_aplicados.append(f"Mês (Chegada): {', '.join(map(str, mes_filter))}")
             
             if polo_passivo_filter:
                 filtered_df = filtered_df[filtered_df['POLO_PASSIVO'].isin(polo_passivo_filter)]
@@ -881,7 +914,7 @@ def main():
                 # Exibir dados filtrados
                 colunas_filtro = [
                     'NUMERO_PROCESSO', 'POLO_ATIVO', 'POLO_PASSIVO', 'data_chegada_formatada',
-                    'mes', 'dia', 'servidor', 'vara', 'ASSUNTO_PRINCIPAL'
+                    'mes', 'DIAS', 'servidor', 'vara', 'ASSUNTO_PRINCIPAL'
                 ]
                 
                 # Filtra apenas colunas que realmente existem após o processamento
@@ -891,7 +924,7 @@ def main():
                 # Renomeia para exibição no Streamlit e para o PDF
                 display_filtered.columns = [
                     'Nº Processo', 'Polo Ativo', 'Polo Passivo', 'Data Chegada',
-                    'Mês', 'Dia', 'Servidor', 'Vara', 'Assunto Principal'
+                    'Mês', 'Dias', 'Servidor', 'Vara', 'Assunto Principal'
                 ][:len(display_filtered.columns)]
                 
                 st.dataframe(display_filtered, use_container_width=True)
@@ -973,7 +1006,7 @@ def main():
                         
                         st.markdown(f"**Vara:** {vara_final}")
                         st.markdown(f"**Órgão Julgador:** {orgao_julgador}")
-                        st.markdown(f"**Data de Chegada:** {processo_info.get('data_chegada_formatada', 'N/A')}")
+                        st.markdown(f"**Data de Chegada:** {processo_info.get('data_chegada_formatada', 'N/A')} (Há **{processo_info.get('DIAS', '0')}** dias)")
                         # --- FIM DO QUADRO DE INFORMAÇÕES ---
                         
                         # Seleção de servidor (usando a lista fixa definida no início do código)
