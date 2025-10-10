@@ -945,4 +945,3 @@ if uploaded_file is not None:
 if **name** == "**main**":
 main()
 
-[23 read me](https://www.notion.so/23-read-me-2872005e4a29802f8e37ebb556d80611?pvs=21)
