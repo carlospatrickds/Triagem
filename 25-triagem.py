@@ -17,7 +17,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# CSS customizado (Adicionado estilo para a aba de Atribuição)
+# CSS customizado
 st.markdown("""
 <style>
     .main-header {
@@ -44,7 +44,7 @@ st.markdown("""
         white-space: normal !important;
         max-width: 300px;
     }
-    /* NOVO: Estilo para destaque de assunto na aba de atribuição */
+    /* Estilo para destaque de assunto na aba de atribuição */
     .assunto-destaque {
         background-color: #ffeeb9; /* Amarelo claro */
         border-left: 5px solid #ffcc00;
@@ -68,7 +68,7 @@ SERVIDORES_DISPONIVEIS = [
     "Supervisão 08"
 ]
 
-# --- MAPA DE COLUNAS UNIFICADO (ATUALIZADO) ---
+# --- MAPA DE COLUNAS UNIFICADO ---
 
 # Novo Nome (PADRÃO) -> Lista de Nomes Possíveis nos CSVs
 COLUNA_MAP = {
@@ -79,9 +79,9 @@ COLUNA_MAP = {
     'ASSUNTO_PRINCIPAL': ['Assunto', 'assuntoPrincipal', 'Assunto Principal'], 
     'TAREFA': ['Tarefa', 'nomeTarefa'],
     'ETIQUETAS': ['Etiquetas', 'tagsProcessoList'],
-    # A coluna 'DIAS' agora é crucial para o cálculo do Painel Gerencial
+    # 'DIAS_TRANSCORRIDOS' é a coluna 'Dias' do Painel Gerencial
     'DIAS_TRANSCORRIDOS': ['Dias'],  
-    'DATA_ULTIMO_MOVIMENTO_RAW': ['Data Último Movimento'], # Coluna bruta de data (Painel Gerencial)
+    'DATA_ULTIMO_MOVIMENTO_RAW': ['Data Último Movimento'], # Não usada no cálculo, mantida para informação
     'DATA_CHEGADA_RAW': ['dataChegada'], # Coluna bruta de data (Tarefa Simples)
     'DATA_CHEGADA_FORMATADA_INPUT': ['Data Chegada'] # Coluna formatada (Arquivos já processados/exportados)
 }
@@ -111,12 +111,10 @@ def mapear_e_padronizar_colunas(df: pd.DataFrame) -> pd.DataFrame:
 def processar_dados(df):
     """Processa os dados do CSV, usando APENAS nomes de colunas padronizados."""
     
-    # Criar cópia para não modificar o original
     processed_df = df.copy()
     
     # Colunas essenciais que DEVEM existir após a padronização
     if 'ETIQUETAS' not in processed_df.columns:
-        # Se não encontrar a coluna de Etiquetas, adiciona uma vazia para evitar erro
         processed_df['ETIQUETAS'] = "Sem etiqueta"
     
     # --- 1. Processar Tags ---
@@ -150,9 +148,12 @@ def processar_dados(df):
     else:
         processed_df['vara'] = processed_df['ETIQUETAS'].apply(extrair_vara)
     
-    # --- 2. Processar Datas e Calcular Dias (LÓGICA DE RETROAÇÃO) ---
+    # --- 2. Processar Datas e Calcular Dias (LÓGICA CORRIGIDA) ---
     
     processed_df['data_chegada_obj'] = pd.NaT
+    
+    # Data de referência para os cálculos (HOJE, na hora da execução)
+    data_referencia = pd.to_datetime(get_local_time().date())
     
     # --- Lógica de Prioridade de Data ---
     
@@ -163,46 +164,8 @@ def processar_dados(df):
             format='%d/%m/%Y', 
             errors='coerce'
         )
-        # st.info("Prioridade 1: Usando coluna 'Data Chegada' de arquivo processado.")
 
-    # B. Prioridade 2: Cálculo Retroativo (Data Último Movimento - Dias Transcorridos) - Painel Gerencial
-    if processed_df['data_chegada_obj'].isna().all() and 'DATA_ULTIMO_MOVIMENTO_RAW' in processed_df.columns and 'DIAS_TRANSCORRIDOS' in processed_df.columns:
-        
-        def extrair_e_calcular_data(row):
-            data_mov_raw = row['DATA_ULTIMO_MOVIMENTO_RAW']
-            dias_transcorridos = row['DIAS_TRANSCORRIDOS']
-            
-            if pd.isna(data_mov_raw) or pd.isna(dias_transcorridos):
-                return pd.NaT
-
-            data_mov_raw = str(data_mov_raw)
-            try:
-                dias_transcorridos = int(dias_transcorridos) # Deve ser um inteiro
-            except ValueError:
-                return pd.NaT
-            
-            try:
-                # 1. Tentar formato Timestamp (o mais comum no PJE+R)
-                if len(data_mov_raw) > 10 and data_mov_raw.isdigit():
-                    data_mov_obj = pd.to_datetime(int(data_mov_raw), unit='ms').normalize()
-                    # Subtrai os dias para obter a data de chegada real
-                    return data_mov_obj - timedelta(days=dias_transcorridos)
-                
-            except:
-                pass
-                
-            return pd.NaT # Se falhar
-
-        # Aplicar a função de cálculo retroativo APENAS onde a data ainda é NaT
-        processed_df.loc[processed_df['data_chegada_obj'].isna(), 'data_chegada_obj'] = processed_df.apply(
-            extrair_e_calcular_data, axis=1
-        )
-        # st.info("Prioridade 2: Calculando 'Data Chegada' retroativamente (Último Movimento - Dias).")
-        
-        # MANTEMOS A COLUNA DIAS ORIGINAL DO PAINEL GERENCIAL
-        processed_df['DIAS'] = processed_df['DIAS_TRANSCORRIDOS'].fillna(0).astype(int)
-
-    # C. Prioridade 3: Data Chegada de arquivo de tarefa simples (DD/MM/YYYY, HH:MM:SS)
+    # B. Prioridade 2: Data Chegada de arquivo de tarefa simples (DD/MM/YYYY, HH:MM:SS)
     if processed_df['data_chegada_obj'].isna().all() and 'DATA_CHEGADA_RAW' in processed_df.columns:
         
         def extrair_data_chegada_raw(data_str):
@@ -219,45 +182,72 @@ def processar_dados(df):
             
             return pd.NaT
         
-        # Aplicar a extração da data
         processed_df.loc[processed_df['data_chegada_obj'].isna(), 'data_chegada_obj'] = processed_df['DATA_CHEGADA_RAW'].apply(extrair_data_chegada_raw)
-        # st.info("Prioridade 3: Usando coluna 'dataChegada' de arquivo de tarefa simples.")
     
+    
+    # C. Prioridade 3: CÁLCULO CORRIGIDO: Data Hoje - Dias Transcorridos (Painel Gerencial)
+    if processed_df['data_chegada_obj'].isna().all() and 'DIAS_TRANSCORRIDOS' in processed_df.columns:
+        
+        def calcular_data_chegada_painel_gerencial(row):
+            dias_transcorridos = row['DIAS_TRANSCORRIDOS']
+            
+            if pd.isna(dias_transcorridos):
+                return pd.NaT
+            
+            try:
+                # O PJE+R sempre calcula a diferença de dias até a data de hoje.
+                dias = int(dias_transcorridos)
+                # Data de Chegada = Data de Hoje - Dias na Tarefa
+                return data_referencia - timedelta(days=dias)
+            except ValueError:
+                return pd.NaT
+            except TypeError:
+                 return pd.NaT
+        
+        processed_df.loc[processed_df['data_chegada_obj'].isna(), 'data_chegada_obj'] = processed_df.apply(
+            calcular_data_chegada_painel_gerencial, axis=1
+        )
+        
+        # MANTEMOS A COLUNA DIAS ORIGINAL DO PAINEL GERENCIAL
+        processed_df['DIAS'] = processed_df['DIAS_TRANSCORRIDOS'].fillna(0).astype(int)
+
     # --- Continuação do Processamento de Data ---
     
-    # Filtra linhas onde a data não pôde ser extraída para evitar erros
+    # 1. Filtra linhas onde a data não pôde ser extraída para evitar erros
     processed_df.dropna(subset=['data_chegada_obj'], inplace=True)
 
     if not processed_df.empty:
-        # Calcula Mês e Dia a partir da DATA DE CHEGADA CALCULADA
+        
+        # FILTRO DE SANIDADE DE DATA: Remove processos muito antigos
+        # MANTIDO para garantir que só processos relevantes (p.ex., 2024 em diante) sejam considerados
+        processed_df = processed_df[processed_df['data_chegada_obj'].dt.year >= 2024].copy()
+        
+        if processed_df.empty:
+             return processed_df
+        
+        # 2. Calcula Mês e Dia a partir da DATA DE CHEGADA CALCULADA
         processed_df['mes'] = processed_df['data_chegada_obj'].dt.month
         processed_df['dia'] = processed_df['data_chegada_obj'].dt.day
         
-        # Formatar data de chegada (apenas data)
+        # 3. Formatar data de chegada (apenas data)
         processed_df['data_chegada_formatada_final'] = processed_df['data_chegada_obj'].dt.strftime('%d/%m/%Y')
         
-        # Se a coluna DIAS não veio do Painel Gerencial (Prioridade 2), calcula o DIAS.
+        # 4. Se a coluna DIAS não veio do Painel Gerencial (Prioridade 3), calcula o DIAS.
         if 'DIAS' not in processed_df.columns:
-            # Definindo uma data de referência (data de hoje)
-            data_referencia = pd.to_datetime(get_local_time().date())
-            
             # Calcular a diferença em dias
             processed_df['DIAS'] = (data_referencia - processed_df['data_chegada_obj']).dt.days
             processed_df['DIAS'] = processed_df['DIAS'].fillna(0).astype(int)
         
-        # Ordenar por data de chegada (mais recente primeiro)
+        # 5. Ordenar por data de chegada (mais recente primeiro)
         processed_df = processed_df.sort_values('data_chegada_obj', ascending=False)
     
     
     # Colunas de saída (usando os nomes padronizados)
-    # Remove as colunas RAW e FORMATADA_INPUT
     cols_to_remove = ['DATA_ULTIMO_MOVIMENTO_RAW', 'DATA_CHEGADA_RAW', 'DATA_CHEGADA_FORMATADA_INPUT', 'DIAS_TRANSCORRIDOS']
     cols_to_keep = [col for col in list(COLUNA_MAP.keys()) + ['servidor', 'vara', 'data_chegada_obj', 'mes', 'dia', 'data_chegada_formatada_final', 'DIAS'] if col not in cols_to_remove]
     
-    # Garante que não haja duplicatas de colunas
     cols_to_keep = list(dict.fromkeys(cols_to_keep))
     
-    # Filtra e renomeia
     processed_df = processed_df.filter(items=cols_to_keep)
     
     if 'data_chegada_formatada_final' in processed_df.columns:
@@ -348,7 +338,6 @@ def criar_grafico_pizza_com_legenda(dados, titulo):
     
     return chart
 
-# Funções de Relatórios PDF (Inalteradas)
 def criar_relatorio_visao_geral(stats, total_processos):
     class PDF(FPDF):
         def header(self):
@@ -532,8 +521,6 @@ def criar_relatorio_filtros(df_filtrado, filtros_aplicados):
         # Dados da tabela - TODOS os processos filtrados
         pdf.set_font('Arial', '', 7)
         for _, row in df_filtrado.iterrows():
-            # **ATENÇÃO:** As colunas aqui (Nº Processo, Polo Ativo, etc) precisam
-            # corresponder aos nomes finais usados na main() antes de chamar esta função!
             n_processo = str(row['Nº Processo']) if pd.notna(row['Nº Processo']) else ''
             polo_ativo = str(row['Polo Ativo']) if pd.notna(row['Polo Ativo']) else ''
             data_chegada = str(row['Data Chegada']) if pd.notna(row['Data Chegada']) else ''
@@ -557,7 +544,6 @@ def criar_relatorio_filtros(df_filtrado, filtros_aplicados):
 def gerar_link_download_pdf(pdf, nome_arquivo):
     """Gera link de download para o PDF"""
     try:
-        # Pega a string de bytes do PDF
         pdf_output = pdf.output(dest='S').encode('latin-1')
         b64 = base64.b64encode(pdf_output).decode('latin-1')
         href = f'<a href="data:application/octet-stream;base64,{b64}" download="{nome_arquivo}">📄 Baixar Relatório PDF</a>'
@@ -836,7 +822,7 @@ def main():
             
             servidor_options = sorted(processed_df['servidor'].unique())
             
-            # Verificações de colunas para evitar KeyError
+            # Verificações de colunas para evitar KeyError (CORREÇÃO ANTERIOR MANTIDA)
             mes_options = []
             if 'mes' in processed_df.columns:
                 mes_options = sorted(processed_df['mes'].dropna().unique())
@@ -1027,7 +1013,7 @@ def main():
                             atribuicao = {
                                 'NUMERO_PROCESSO': processo_info['NUMERO_PROCESSO'],
                                 'vara': vara_final,
-                                'ORGAO_JULGADOR': orgao_julgador, # Mapeado para o nome padronizado
+                                'ORGAO_JULGADOR': orgao_julgador,
                                 'servidor': novo_servidor,
                                 'data_atribuicao': get_local_time().strftime('%d/%m/%Y %H:%M'),
                                 'POLO_ATIVO': processo_info.get('POLO_ATIVO', ''),
