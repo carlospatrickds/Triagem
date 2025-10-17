@@ -632,7 +632,7 @@ def main():
             st.warning(
                 "Observação sobre arquivos do Painel Gerencial:\n"
                 "- O Painel Gerencial exporta apenas a coluna 'Dias' (DIAS_TRANSCORRIDOS), que é calculada considerando o horário exato da extração do painel.\n"
-                "- Isso pode gerar discrepâncias em relação aos CSVs do tipo \"[JEF] CALCULO - ELABORAR\", que trazem a Data de Chegada (às vezes com hora).\n"
+                "- Isso pode gerar discrepâncias em relação aos CSVs do tipo \"[JEF] CALCULO - ELABORAR\", que trazem a Data de Chegada (considerando apenas o dia, mês e ano).\n"
                 "- Exemplo: se o painel for extraído hoje às 12:15 e um processo chegou ontem às 12:14, o painel indicará 0 dias de atraso; se chegou às 12:16, indicará 1 dia de atraso.\n"
                 "- Portanto, é possível que haja diferenças no mês/dia calculados entre as duas fontes. O sistema usa a regra (HOJE()-1)-DIAS para estimar a data a partir do Painel Gerencial.\n"
                 "  Considere essa limitação ao interpretar os resultados."
